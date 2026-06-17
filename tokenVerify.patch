@@ -1,18 +1,5 @@
-diff --git a/apps/server/src/globalConfig/index.ts b/apps/server/src/globalConfig/index.ts
-index 856bf3104..7f4f1ca64 100644
---- a/apps/server/src/globalConfig/index.ts
-+++ b/apps/server/src/globalConfig/index.ts
-@@ -47,7 +47,7 @@ export const getServerGlobalConfig = async () => {
-       modelListKey: 'AWS_BEDROCK_MODEL_LIST',
-     },
-     deepseek: {
--      enabled: true,
-+      enabled: false,
-     },
-     giteeai: {
-       enabledKey: 'ENABLED_GITEE_AI',
 diff --git a/packages/env/src/auth.ts b/packages/env/src/auth.ts
-index 422fe85c8..4c85614c3 100644
+index 422fe85c8..bd35367eb 100644
 --- a/packages/env/src/auth.ts
 +++ b/packages/env/src/auth.ts
 @@ -74,6 +74,51 @@ declare global {
@@ -67,11 +54,10 @@ index 422fe85c8..4c85614c3 100644
        AUTH_TRUSTED_ORIGINS?: string;
  
        AUTH_WECHAT_ID?: string;
-@@ -196,6 +241,14 @@ export const getAuthConfig = () => {
+@@ -117,6 +162,14 @@ export const getAuthConfig = () => {
+       AUTH_ALLOWED_EMAILS: z.string().optional(),
+       AUTH_DISABLE_EMAIL_PASSWORD: z.boolean().optional().default(false),
  
-       // Internal JWT expiration time (e.g., '10s', '1m', '1h')
-       INTERNAL_JWT_EXPIRATION: z.string().default('30s'),
-+
 +      // Token cookie authentication
 +      AUTH_TOKEN_COOKIE_KEY: z.string().optional().default('token'),
 +      AUTH_TOKEN_VERIFY_URL: z.string().optional(),
@@ -79,14 +65,14 @@ index 422fe85c8..4c85614c3 100644
 +      AUTH_TOKEN_USER_INFO_EMAIL_KEY: z.string().optional().default('email'),
 +      AUTH_TOKEN_USER_INFO_NAME_KEY: z.string().optional().default('name'),
 +      AUTH_TOKEN_DEFAULT_EMAIL_DOMAIN: z.string().optional().default('lobehub.com'),
-     },
- 
-     runtimeEnv: {
-@@ -289,6 +342,14 @@ export const getAuthConfig = () => {
- 
-       // Internal JWT expiration time
-       INTERNAL_JWT_EXPIRATION: process.env.INTERNAL_JWT_EXPIRATION,
 +
+       AUTH_GOOGLE_ID: z.string().optional(),
+       AUTH_GOOGLE_SECRET: z.string().optional(),
+ 
+@@ -207,6 +260,14 @@ export const getAuthConfig = () => {
+       AUTH_ALLOWED_EMAILS: process.env.AUTH_ALLOWED_EMAILS,
+       AUTH_DISABLE_EMAIL_PASSWORD: process.env.AUTH_DISABLE_EMAIL_PASSWORD === '1',
+ 
 +      // Token cookie authentication
 +      AUTH_TOKEN_COOKIE_KEY: process.env.AUTH_TOKEN_COOKIE_KEY,
 +      AUTH_TOKEN_VERIFY_URL: process.env.AUTH_TOKEN_VERIFY_URL,
@@ -94,11 +80,12 @@ index 422fe85c8..4c85614c3 100644
 +      AUTH_TOKEN_USER_INFO_EMAIL_KEY: process.env.AUTH_TOKEN_USER_INFO_EMAIL_KEY,
 +      AUTH_TOKEN_USER_INFO_NAME_KEY: process.env.AUTH_TOKEN_USER_INFO_NAME_KEY,
 +      AUTH_TOKEN_DEFAULT_EMAIL_DOMAIN: process.env.AUTH_TOKEN_DEFAULT_EMAIL_DOMAIN,
-     },
-   });
- };
++
+       // Cognito provider specific env vars
+       AUTH_COGNITO_DOMAIN: process.env.AUTH_COGNITO_DOMAIN,
+       AUTH_COGNITO_REGION: process.env.AUTH_COGNITO_REGION,
 diff --git a/packages/trpc/src/lambda/context.ts b/packages/trpc/src/lambda/context.ts
-index f52dfa533..6fc8f5ee1 100644
+index f52dfa533..898ca3952 100644
 --- a/packages/trpc/src/lambda/context.ts
 +++ b/packages/trpc/src/lambda/context.ts
 @@ -11,6 +11,7 @@ import { authEnv, LOBE_CHAT_OIDC_AUTH_HEADER } from '@/envs/auth';
@@ -109,24 +96,7 @@ index f52dfa533..6fc8f5ee1 100644
  import { isApiKeyExpired, validateApiKeyFormat } from '@/utils/apiKey';
  
  // Create context logger namespace
-@@ -242,16 +243,48 @@ export const createLambdaContext = async (request: NextRequest): Promise<LambdaC
-       log('Better Auth authentication failed, no valid session');
-     }
- 
--    return createContextInner({
--      ...commonContext,
--      traceContext,
--      userId,
--    });
-+    if (userId) {
-+      return createContextInner({
-+        ...commonContext,
-+        traceContext,
-+        userId,
-+      });
-+    }
-   } catch (e) {
-     log('Better Auth authentication error: %O', e);
+@@ -252,6 +253,36 @@ export const createLambdaContext = async (request: NextRequest): Promise<LambdaC
      console.error('better auth err', e);
    }
  
@@ -164,7 +134,7 @@ index f52dfa533..6fc8f5ee1 100644
    log(
      'All authentication methods attempted, returning final context, userId: %s',
 diff --git a/src/libs/next/proxy/define-config.ts b/src/libs/next/proxy/define-config.ts
-index 1471ae082..725b95b9f 100644
+index 1471ae082..46a05e9f0 100644
 --- a/src/libs/next/proxy/define-config.ts
 +++ b/src/libs/next/proxy/define-config.ts
 @@ -6,9 +6,11 @@ import urlJoin from 'url-join';
@@ -187,9 +157,9 @@ index 1471ae082..725b95b9f 100644
  
  // Dev-only debug proxy route should bypass all middleware rewrites.
  const dangerousLocalDevProxyRoute = '/_dangerous_local_dev_proxy';
-@@ -243,6 +246,58 @@ export function defineConfig() {
- 
-     const isLoggedIn = !!session?.user;
+@@ -248,6 +251,60 @@ export function defineConfig() {
+       userId: session?.user?.id,
+     });
  
 +    if (!isLoggedIn) {
 +      // Check if token authentication is enabled
@@ -201,8 +171,10 @@ index 1471ae082..725b95b9f 100644
 +        logTokenAuth('Token authentication cookie: %s', cookieToken);
 +        if (cookieToken) {
 +          try {
-+            const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-+              req.headers.get('x-real-ip')?.trim() || undefined;
++            const clientIp =
++              req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
++              req.headers.get('x-real-ip')?.trim() ||
++              undefined;
 +            const userAgent = req.headers.get('user-agent') || undefined;
 +
 +            // Get serverDB for database access
@@ -243,18 +215,18 @@ index 1471ae082..725b95b9f 100644
 +      }
 +    }
 +
-     logBetterAuth('BetterAuth session status: %O', {
-       isLoggedIn,
-       userId: session?.user?.id,
+     if (!isLoggedIn) {
+       // If request a protected route, redirect to sign-in page
+       if (isProtected) {
 diff --git a/src/services/tokenAuth/index.ts b/src/services/tokenAuth/index.ts
 new file mode 100644
-index 000000000..543a0729a
+index 000000000..1b17d121d
 --- /dev/null
 +++ b/src/services/tokenAuth/index.ts
-@@ -0,0 +1,467 @@
+@@ -0,0 +1,423 @@
 +import type { LobeChatDatabase } from '@lobechat/database';
 +import { createNanoId, idGenerator } from '@lobechat/database';
-+import { session, users } from '@lobechat/database/schemas';
++import { session as betterAuthSession, users } from '@lobechat/database/schemas';
 +import debug from 'debug';
 +import { eq } from 'drizzle-orm';
 +
@@ -304,17 +276,10 @@ index 000000000..543a0729a
 +}
 +
 +/**
-+   * Result of token authentication
-+   */
++ * Result of token authentication
++ */
 +interface TokenAuthResult {
 +  sessionToken: string;
-+  userId: string;
-+}
-+
-+/**
-+ * Result of session validation
-+ */
-+interface SessionValidationResult {
 +  userId: string;
 +}
 +
@@ -369,7 +334,9 @@ index 000000000..543a0729a
 +  /**
 +   * Extract user info from API response using configured key paths
 +   */
-+  private extractUserInfoFromResponse(responseData: Record<string, unknown>): TokenVerifyUserInfo | null {
++  private extractUserInfoFromResponse(
++    responseData: Record<string, unknown>,
++  ): TokenVerifyUserInfo | null {
 +    const idKey = authEnv.AUTH_TOKEN_USER_INFO_ID_KEY || 'id';
 +    const emailKey = authEnv.AUTH_TOKEN_USER_INFO_EMAIL_KEY || 'email';
 +    const nameKey = authEnv.AUTH_TOKEN_USER_INFO_NAME_KEY || 'name';
@@ -442,7 +409,7 @@ index 000000000..543a0729a
 +        return null;
 +      }
 +
-+      const responseData = await response.json() as Record<string, unknown>;
++      const responseData = (await response.json()) as Record<string, unknown>;
 +      log('Token verification response: %O', responseData);
 +
 +      return this.extractUserInfoFromResponse(responseData);
@@ -527,7 +494,7 @@ index 000000000..543a0729a
 +
 +  /**
 +   * Get the user data for session caching
-+   * 
++   *
 +   * Better Auth expects the user object to have specific fields:
 +   * - id: string
 +   * - email: string | null
@@ -567,7 +534,7 @@ index 000000000..543a0729a
 +
 +  /**
 +   * Update Redis cache with session data
-+   * 
++   *
 +   * Note: The key format must match what Better Auth expects.
 +   * Better Auth's secondaryStorage adds 'better-auth:' prefix automatically,
 +   * so we only need to provide the key suffix 'session:${sessionToken}'.
@@ -575,7 +542,7 @@ index 000000000..543a0729a
 +  private async updateSessionCache(
 +    sessionToken: string,
 +    sessionData: Record<string, unknown>,
-+    ttl: number,
++    ttlSeconds: number,
 +  ): Promise<void> {
 +    const redisConfig = getRedisConfig();
 +    if (!isRedisEnabled(redisConfig)) {
@@ -591,132 +558,92 @@ index 000000000..543a0729a
 +      }
 +
 +      // Better Auth's secondaryStorage adds 'better-auth:' prefix,
-+      // so we use 'session:${sessionToken}' as the key
-+      // Final key will be: 'better-auth:session:${sessionToken}'
-+      const key = `session:${sessionToken}`;
-+      const value = JSON.stringify(sessionData);
-+
-+      await redisClient.set(key, value, { ex: ttl });
-+      log('Updated Redis session cache for token: %s', sessionToken);
++      // so we use 'session:${sessionToken}' as the key suffix
++      const cacheKey = `session:${sessionToken}`;
++      await redisClient.setex(cacheKey, ttlSeconds, JSON.stringify(sessionData));
++      log('Session cache updated for key: %s', cacheKey);
 +    } catch (error) {
 +      log('Error updating session cache: %O', error);
-+      // Don't fail the entire operation if Redis is unavailable
 +    }
 +  }
 +
 +  /**
-+   * Create a Better Auth session for the user
-+   */
-+  private async createSession(userId: string, ipAddress?: string, userAgent?: string): Promise<string> {
-+    // Generate session token using nanoid (32 chars like Better Auth)
-+    const sessionToken = createNanoId(32)();
-+    const sessionId = createNanoId(12)();
-+    const now = new Date();
-+
-+    // Session expires in 7 days (Better Auth default)
-+    const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-+
-+    log('Creating session for user: %s, token: %s', userId, sessionToken);
-+
-+    await this.db.insert(session).values({
-+      id: sessionId,
-+      token: sessionToken,
-+      userId,
-+      expiresAt,
-+      ipAddress: ipAddress || null,
-+      userAgent: userAgent || null,
-+      createdAt: now,
-+      updatedAt: now,
-+    });
-+
-+    // Get user data for session cache
-+    const userData = await this.getUserForSession(userId);
-+    if (userData) {
-+      // Build session data in the format Better Auth expects
-+      const sessionData = {
-+        id: sessionId,
-+        userId,
-+        expiresAt: expiresAt.toISOString(),
-+        ipAddress,
-+        userAgent,
-+        user: userData,
-+      };
-+
-+      // Calculate TTL in seconds (7 days)
-+      const ttl = 7 * 24 * 60 * 60;
-+      await this.updateSessionCache(sessionToken, sessionData, ttl);
-+    }
-+
-+    return sessionToken;
-+  }
-+
-+  /**
-+   * Authenticate user using token from cookie
++   * Authenticate with token and create a Better Auth session
 +   *
-+   * @param token - The token extracted from cookie
-+   * @param ipAddress - Optional IP address for session
-+   * @param userAgent - Optional user agent for session
-+   * @returns TokenAuthResult with session token and user ID, or null if authentication fails
++   * @param token - The token from cookie
++   * @param ipAddress - Client IP address
++   * @param userAgent - Client user agent
++   * @returns TokenAuthResult with sessionToken and userId, or null if authentication failed
 +   */
 +  async authenticateWithToken(
 +    token: string,
 +    ipAddress?: string,
 +    userAgent?: string,
 +  ): Promise<TokenAuthResult | null> {
-+    // First, try to validate if this token is already a valid session token
-+    const existingSession = await this.validateSessionToken(token);
-+    if (existingSession) {
-+      log('Token is already a valid session token, userId: %s', existingSession.userId);
-+      return {
-+        sessionToken: token,
-+        userId: existingSession.userId,
-+      };
-+    }
++    log('Starting token authentication process');
 +
-+    // If not a session token, verify with external API
++    // Step 1: Verify token with external API
 +    const userInfo = await this.verifyTokenWithExternalApi(token);
 +    if (!userInfo) {
-+      log('Token verification returned no user info');
++      log('Token verification failed or returned no user info');
 +      return null;
 +    }
 +
-+    // Find or create user
-+    const userId = await this.findOrCreateUser(userInfo);
++    log('Token verified successfully for user: %s', userInfo.email || userInfo.name);
 +
-+    // Create session
-+    const sessionToken = await this.createSession(userId, ipAddress, userAgent);
++    // Step 2: Find or create user
++    const userId = await this.findOrCreateUser(userInfo);
++    log('User identified/created with ID: %s', userId);
++
++    // Step 3: Get user data for session
++    const userData = await this.getUserForSession(userId);
++    if (!userData) {
++      log('Failed to get user data for session');
++      return null;
++    }
++
++    // Step 4: Create session in database
++    const sessionToken = createNanoId(32)();
++    const sessionId = createNanoId(32)();
++    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
++
++    try {
++      await this.db.insert(betterAuthSession).values({
++        id: sessionId,
++        token: sessionToken,
++        userId,
++        expiresAt,
++        ipAddress: ipAddress || null,
++        userAgent: userAgent || null,
++      });
++
++      log('Session created in database for user: %s', userId);
++    } catch (error) {
++      log('Error creating session in database: %O', error);
++      throw error;
++    }
++
++    // Step 5: Update Redis cache
++    const sessionTtlSeconds = 7 * 24 * 60 * 60; // 7 days in seconds
++    const sessionCacheData = {
++      user: userData,
++      session: {
++        id: sessionToken,
++        userId,
++        expiresAt: expiresAt.toISOString(),
++        token: sessionToken,
++      },
++    };
++
++    await this.updateSessionCache(
++      sessionToken,
++      sessionCacheData as Record<string, unknown>,
++      sessionTtlSeconds,
++    );
 +
 +    return {
 +      sessionToken,
 +      userId,
 +    };
 +  }
-+
-+  /**
-+   * Validate an existing session token by checking the database
-+   *
-+   * @param sessionToken - The session token to validate
-+   * @returns SessionValidationResult with user ID if valid, null otherwise
-+   */
-+  async validateSessionToken(sessionToken: string): Promise<SessionValidationResult | null> {
-+    try {
-+      const now = new Date();
-+      const sessionRecord = await this.db.query.session.findFirst({
-+        where: (session, { and, eq, gt }) =>
-+          and(eq(session.token, sessionToken), gt(session.expiresAt, now)),
-+      });
-+
-+      if (sessionRecord) {
-+        log('Session token validated successfully, userId: %s', sessionRecord.userId);
-+        return { userId: sessionRecord.userId };
-+      }
-+
-+      log('Session token not found or expired');
-+      return null;
-+    } catch (error) {
-+      log('Error validating session token: %O', error);
-+      return null;
-+    }
-+  }
 +}
-\ No newline at end of file
