@@ -13,7 +13,7 @@ jobs:
     - name: Checkout Target Repository
       uses: actions/checkout@v4
       with:
-        repository: 'https://github.com/lobehub/lobehub.git'
+        repository: 'lobehub/lobehub'
         path: 'target-repo'
         
     - name: Checkout Current Repository (for patch file)
