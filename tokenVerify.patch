@@ -248,10 +248,10 @@ index 1471ae082..725b95b9f 100644
        userId: session?.user?.id,
 diff --git a/src/services/tokenAuth/index.ts b/src/services/tokenAuth/index.ts
 new file mode 100644
-index 000000000..966c70ca0
+index 000000000..543a0729a
 --- /dev/null
 +++ b/src/services/tokenAuth/index.ts
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,467 @@
 +import type { LobeChatDatabase } from '@lobechat/database';
 +import { createNanoId, idGenerator } from '@lobechat/database';
 +import { session, users } from '@lobechat/database/schemas';
@@ -527,6 +527,15 @@ index 000000000..966c70ca0
 +
 +  /**
 +   * Get the user data for session caching
++   * 
++   * Better Auth expects the user object to have specific fields:
++   * - id: string
++   * - email: string | null
++   * - name: string | null (mapped from fullName in database)
++   * - emailVerified: boolean | null
++   * - image: string | null (mapped from avatar in database)
++   * - createdAt: string (ISO format)
++   * - updatedAt: string (ISO format)
 +   */
 +  private async getUserForSession(userId: string): Promise<Record<string, unknown> | null> {
 +    try {
@@ -539,11 +548,14 @@ index 000000000..966c70ca0
 +        return null;
 +      }
 +
++      // Better Auth expects 'name' not 'fullName' based on the config:
++      // user: { fields: { name: 'fullName' } }
 +      return {
 +        id: user.id,
 +        email: user.email || null,
-+        fullName: user.fullName || null,
++        name: user.fullName || null,
 +        emailVerified: user.emailVerified,
++        image: (user as Record<string, unknown>).avatar || null,
 +        createdAt: user.createdAt.toISOString(),
 +        updatedAt: user.updatedAt.toISOString(),
 +      };
@@ -555,6 +567,10 @@ index 000000000..966c70ca0
 +
 +  /**
 +   * Update Redis cache with session data
++   * 
++   * Note: The key format must match what Better Auth expects.
++   * Better Auth's secondaryStorage adds 'better-auth:' prefix automatically,
++   * so we only need to provide the key suffix 'session:${sessionToken}'.
 +   */
 +  private async updateSessionCache(
 +    sessionToken: string,
@@ -574,7 +590,10 @@ index 000000000..966c70ca0
 +        return;
 +      }
 +
-+      const key = `better-auth:session:${sessionToken}`;
++      // Better Auth's secondaryStorage adds 'better-auth:' prefix,
++      // so we use 'session:${sessionToken}' as the key
++      // Final key will be: 'better-auth:session:${sessionToken}'
++      const key = `session:${sessionToken}`;
 +      const value = JSON.stringify(sessionData);
 +
 +      await redisClient.set(key, value, { ex: ttl });
