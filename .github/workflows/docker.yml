@@ -24,7 +24,7 @@ jobs:
     - name: Apply patchs
       working-directory: target-repo   # 在目标仓库目录下执行
       run: |
-        git apply ../patch-repo/tokenVerify.patch
+        git apply ../patch-repo/disable-deepseek.patch
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
