@@ -1,0 +1,13 @@
+diff --git a/apps/server/src/globalConfig/index.ts b/apps/server/src/globalConfig/index.ts
+index 856bf3104..7f4f1ca64 100644
+--- a/apps/server/src/globalConfig/index.ts
++++ b/apps/server/src/globalConfig/index.ts
+@@ -47,7 +47,7 @@ export const getServerGlobalConfig = async () => {
+       modelListKey: 'AWS_BEDROCK_MODEL_LIST',
+     },
+     deepseek: {
+-      enabled: true,
++      enabled: false,
+     },
+     giteeai: {
+       enabledKey: 'ENABLED_GITEE_AI',
