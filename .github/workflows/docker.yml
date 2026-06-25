@@ -25,8 +25,8 @@ jobs:
       working-directory: target-repo   # 在目标仓库目录下执行
       run: |
         git apply ../patch-repo/disable-deepseek.patch
-        git apply ../patch-repo/starter-qwen3.6.patch
-
+        git apply ../patch-repo/token-auth.patch 
+        
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     

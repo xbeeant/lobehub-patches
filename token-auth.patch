@@ -1,0 +1,185 @@
+diff --git a/packages/env/src/auth.ts b/packages/env/src/auth.ts
+index 422fe85c8..03682c913 100644
+--- a/packages/env/src/auth.ts
++++ b/packages/env/src/auth.ts
+@@ -185,6 +185,13 @@ export const getAuthConfig = () => {
+       AUTH_ZITADEL_SECRET: z.string().optional(),
+       AUTH_ZITADEL_ISSUER: z.string().optional(),
+ 
++      AUTH_TOKEN_AUTH_ENABLED: z.boolean().optional().default(false),
++      AUTH_TOKEN_AUTH_USER_INFO_URL: z.string().optional(),
++      AUTH_TOKEN_AUTH_EMAIL_PATH: z.string().optional().default('email'),
++      AUTH_TOKEN_AUTH_NAME_PATH: z.string().optional().default('name'),
++      AUTH_TOKEN_AUTH_AVATAR_PATH: z.string().optional().default('avatar'),
++      AUTH_TOKEN_AUTH_ID_PATH: z.string().optional().default('id'),
++
+       LOGTO_WEBHOOK_SIGNING_KEY: z.string().optional(),
+ 
+       // Casdoor
+@@ -278,6 +285,13 @@ export const getAuthConfig = () => {
+       AUTH_ZITADEL_SECRET: process.env.AUTH_ZITADEL_SECRET,
+       AUTH_ZITADEL_ISSUER: process.env.AUTH_ZITADEL_ISSUER,
+ 
++      AUTH_TOKEN_AUTH_ENABLED: process.env.AUTH_TOKEN_AUTH_ENABLED === '1',
++      AUTH_TOKEN_AUTH_USER_INFO_URL: process.env.AUTH_TOKEN_AUTH_USER_INFO_URL,
++      AUTH_TOKEN_AUTH_EMAIL_PATH: process.env.AUTH_TOKEN_AUTH_EMAIL_PATH,
++      AUTH_TOKEN_AUTH_NAME_PATH: process.env.AUTH_TOKEN_AUTH_NAME_PATH,
++      AUTH_TOKEN_AUTH_AVATAR_PATH: process.env.AUTH_TOKEN_AUTH_AVATAR_PATH,
++      AUTH_TOKEN_AUTH_ID_PATH: process.env.AUTH_TOKEN_AUTH_ID_PATH,
++
+       // LOGTO
+       LOGTO_WEBHOOK_SIGNING_KEY: process.env.LOGTO_WEBHOOK_SIGNING_KEY,
+ 
+diff --git a/src/libs/better-auth/define-config.ts b/src/libs/better-auth/define-config.ts
+index bad967f06..3d497608b 100644
+--- a/src/libs/better-auth/define-config.ts
++++ b/src/libs/better-auth/define-config.ts
+@@ -21,6 +21,7 @@ import {
+   getVerificationOTPEmailTemplate,
+ } from '@/libs/better-auth/email-templates';
+ import { emailWhitelist } from '@/libs/better-auth/plugins/email-whitelist';
++import { tokenAuth } from '@/libs/better-auth/plugins/token-auth';
+ import { initBetterAuthSSOProviders } from '@/libs/better-auth/sso';
+ import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/utils/config';
+ import { parseSSOProviders } from '@/libs/better-auth/utils/server';
+@@ -276,6 +277,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
+     plugins: [
+       ...customOptions.plugins,
+       emailWhitelist(),
++      tokenAuth(),
+       expo(),
+       admin(),
+       // Email OTP plugin for mobile verification
+diff --git a/src/libs/better-auth/plugins/token-auth.ts b/src/libs/better-auth/plugins/token-auth.ts
+new file mode 100644
+index 000000000..da6a0bd76
+--- /dev/null
++++ b/src/libs/better-auth/plugins/token-auth.ts
+@@ -0,0 +1,126 @@
++import { APIError } from 'better-auth/api';
++import { type BetterAuthPlugin } from 'better-auth/types';
++
++import { authEnv } from '@/envs/auth';
++
++const getNestedValue = (obj: Record<string, unknown>, path: string): unknown => {
++  return path.split('.').reduce((current, key) => {
++    if (current && typeof current === 'object' && key in current) {
++      return (current as Record<string, unknown>)[key];
++    }
++    return undefined;
++  }, obj);
++};
++
++export const tokenAuth = (): BetterAuthPlugin => ({
++  id: 'token-auth',
++  init() {
++    if (!authEnv.AUTH_TOKEN_AUTH_ENABLED || !authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL) {
++      return {};
++    }
++
++    return {
++      apiRoutes: {
++        '/sign-in/token': {
++          POST: async (request, context) => {
++            const { token } = await request.json();
++
++            if (!token) {
++              throw new APIError('BAD_REQUEST', {
++                code: 'TOKEN_REQUIRED',
++                message: 'Token is required',
++              });
++            }
++
++            const userInfoUrl = authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL;
++            const emailPath = authEnv.AUTH_TOKEN_AUTH_EMAIL_PATH || 'email';
++            const namePath = authEnv.AUTH_TOKEN_AUTH_NAME_PATH || 'name';
++            const avatarPath = authEnv.AUTH_TOKEN_AUTH_AVATAR_PATH || 'avatar';
++            const idPath = authEnv.AUTH_TOKEN_AUTH_ID_PATH || 'id';
++            const emailSuffix = authEnv.AUTH_TOKEN_AUTH_EMAIL_SUFFIX || '@lobehub.com';
++
++            const headers: Record<string, string> = {
++              Authorization: `Bearer ${token}`,
++            };
++
++            let userInfoResponse;
++            try {
++              userInfoResponse = await fetch(userInfoUrl, { headers });
++            } catch (error) {
++              throw new APIError('INTERNAL_SERVER_ERROR', {
++                code: 'USER_INFO_FETCH_FAILED',
++                message: 'Failed to fetch user info',
++              });
++            }
++
++            if (!userInfoResponse.ok) {
++              throw new APIError('UNAUTHORIZED', {
++                code: 'INVALID_TOKEN',
++                message: 'Invalid token',
++              });
++            }
++
++            const userInfo = (await userInfoResponse.json()) as Record<string, unknown>;
++
++            let email = getNestedValue(userInfo, emailPath) as string | undefined;
++            const name = getNestedValue(userInfo, namePath) as string | undefined;
++            const avatar = getNestedValue(userInfo, avatarPath) as string | undefined;
++            const externalId = getNestedValue(userInfo, idPath) as string | undefined;
++
++            if (!email) {
++              email = name + emailSuffix;
++            }
++
++            let user = await context.database.getUserByEmail(email);
++
++            if (!user) {
++              user = await context.database.createUser({
++                email,
++                emailVerified: true,
++                ...(name && { name }),
++                ...(avatar && { image: avatar }),
++              });
++            }
++
++            const session = await context.database.createSession({
++              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
++              userId: user.id,
++            });
++
++            const response = new Response(
++              JSON.stringify({
++                data: {
++                  session,
++                  user,
++                },
++                success: true,
++              }),
++              {
++                headers: {
++                  'Content-Type': 'application/json',
++                },
++              },
++            );
++
++            const cookieOptions = {
++              domain: context.options.cookies?.domain,
++              httpOnly: true,
++              path: '/',
++              sameSite: 'lax' as const,
++              secure: context.options.cookies?.secure ?? process.env.NODE_ENV === 'production',
++            };
++
++            response.headers.set(
++              'Set-Cookie',
++              `${context.options.cookies?.name ?? 'auth_session'}=${session.id}; ${Object.entries(cookieOptions)
++                .map(([key, value]) => `${key}=${value}`)
++                .join('; ')}`,
++            );
++
++            return response;
++          },
++        },
++      },
++    };
++  },
++});
+\ No newline at end of file
