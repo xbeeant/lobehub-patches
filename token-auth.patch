@@ -1,37 +1,137 @@
 diff --git a/packages/env/src/auth.ts b/packages/env/src/auth.ts
-index 422fe85c8..03682c913 100644
+index 422fe85c87..1380a20943 100644
 --- a/packages/env/src/auth.ts
 +++ b/packages/env/src/auth.ts
-@@ -185,6 +185,13 @@ export const getAuthConfig = () => {
-       AUTH_ZITADEL_SECRET: z.string().optional(),
-       AUTH_ZITADEL_ISSUER: z.string().optional(),
+@@ -92,6 +92,15 @@ declare global {
+        */
+       INTERNAL_JWT_EXPIRATION?: string;
  
-+      AUTH_TOKEN_AUTH_ENABLED: z.boolean().optional().default(false),
-+      AUTH_TOKEN_AUTH_USER_INFO_URL: z.string().optional(),
-+      AUTH_TOKEN_AUTH_EMAIL_PATH: z.string().optional().default('email'),
-+      AUTH_TOKEN_AUTH_NAME_PATH: z.string().optional().default('name'),
-+      AUTH_TOKEN_AUTH_AVATAR_PATH: z.string().optional().default('avatar'),
-+      AUTH_TOKEN_AUTH_ID_PATH: z.string().optional().default('id'),
++      // ==================== Token Auth Provider ====================
++      AUTH_TOKEN_AUTH_ENABLED?: '0' | '1';
++      AUTH_TOKEN_AUTH_USER_INFO_URL?: string;
++      AUTH_TOKEN_AUTH_EMAIL_PATH?: string;
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX?: string;
++      AUTH_TOKEN_AUTH_ID_PATH?: string;
++      AUTH_TOKEN_AUTH_NAME_PATH?: string;
++      // ============================================================
 +
-       LOGTO_WEBHOOK_SIGNING_KEY: z.string().optional(),
+       // ===== JWKS Key ===== //
+       /**
+        * Generic JWKS key for signing/verifying JWTs.
+@@ -196,6 +205,14 @@ export const getAuthConfig = () => {
  
-       // Casdoor
-@@ -278,6 +285,13 @@ export const getAuthConfig = () => {
-       AUTH_ZITADEL_SECRET: process.env.AUTH_ZITADEL_SECRET,
-       AUTH_ZITADEL_ISSUER: process.env.AUTH_ZITADEL_ISSUER,
+       // Internal JWT expiration time (e.g., '10s', '1m', '1h')
+       INTERNAL_JWT_EXPIRATION: z.string().default('30s'),
++
++      // URL-query token authentication
++      AUTH_TOKEN_AUTH_ENABLED: z.enum(['0', '1']).optional().default('0'),
++      AUTH_TOKEN_AUTH_USER_INFO_URL: z.string().url().optional(),
++      AUTH_TOKEN_AUTH_EMAIL_PATH: z.string().optional(),
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: z.string().optional(),
++      AUTH_TOKEN_AUTH_ID_PATH: z.string().optional(),
++      AUTH_TOKEN_AUTH_NAME_PATH: z.string().optional(),
+     },
  
-+      AUTH_TOKEN_AUTH_ENABLED: process.env.AUTH_TOKEN_AUTH_ENABLED === '1',
+     runtimeEnv: {
+@@ -289,6 +306,14 @@ export const getAuthConfig = () => {
+ 
+       // Internal JWT expiration time
+       INTERNAL_JWT_EXPIRATION: process.env.INTERNAL_JWT_EXPIRATION,
++
++      // URL-query token authentication
++      AUTH_TOKEN_AUTH_ENABLED: process.env.AUTH_TOKEN_AUTH_ENABLED,
 +      AUTH_TOKEN_AUTH_USER_INFO_URL: process.env.AUTH_TOKEN_AUTH_USER_INFO_URL,
 +      AUTH_TOKEN_AUTH_EMAIL_PATH: process.env.AUTH_TOKEN_AUTH_EMAIL_PATH,
-+      AUTH_TOKEN_AUTH_NAME_PATH: process.env.AUTH_TOKEN_AUTH_NAME_PATH,
-+      AUTH_TOKEN_AUTH_AVATAR_PATH: process.env.AUTH_TOKEN_AUTH_AVATAR_PATH,
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: process.env.AUTH_TOKEN_AUTH_EMAIL_SUFFIX,
 +      AUTH_TOKEN_AUTH_ID_PATH: process.env.AUTH_TOKEN_AUTH_ID_PATH,
++      AUTH_TOKEN_AUTH_NAME_PATH: process.env.AUTH_TOKEN_AUTH_NAME_PATH,
+     },
+   });
+ };
+diff --git a/src/app/(backend)/api/auth/token/route.ts b/src/app/(backend)/api/auth/token/route.ts
+new file mode 100644
+index 0000000000..87ffecbde3
+--- /dev/null
++++ b/src/app/(backend)/api/auth/token/route.ts
+@@ -0,0 +1,76 @@
++import { NextRequest, NextResponse } from 'next/server';
++import debug from 'debug';
++import { auth } from '@/auth';
 +
-       // LOGTO
-       LOGTO_WEBHOOK_SIGNING_KEY: process.env.LOGTO_WEBHOOK_SIGNING_KEY,
- 
++const log = debug('middleware:auth:token-route');
++
++/**
++ * Token-based sign-in endpoint.
++ *
++ * Accepts `?token=...` on the query string and delegates to the
++ * `auth.api.tokenSignIn` endpoint (implemented by the `token-auth`
++ * plugin), which:
++ *  1. Validates the token against the configured upstream.
++ *  2. Looks up / creates the local user (no password required).
++ *  3. Issues a better-auth session and sets the session cookies.
++ */
++export async function GET(req: NextRequest) {
++  const token = req.nextUrl.searchParams.get('token');
++
++  if (!token) {
++    log('Missing token parameter');
++    return NextResponse.json(
++      { error: '缺少 token 参数' },
++      { status: 400 },
++    );
++  }
++
++  try {
++    log('Validating token...');
++
++    // `auth.api.<endpoint>` when called programmatically returns the
++    // endpoint's response body directly; to access the Set-Cookie
++    // headers written by `setSessionCookie`, we request the full
++    // { response, headers, status } tuple via returnHeaders=true.
++    const result = (await auth.api.tokenSignIn({
++      body: { token },
++      headers: Object.fromEntries(req.headers.entries()),
++      returnHeaders: true,
++      returnStatus: true,
++    } as any)) as unknown as {
++      response: { token: string; user: { id: string; email: string; name: string } };
++      headers: Headers;
++      status: number;
++    };
++
++    const { response, headers } = result;
++
++    log('Token auth completed successfully for user: %s', response.user.email);
++
++    const res = NextResponse.json(
++      {
++        success: true,
++        user: response.user,
++        session: { token: response.token },
++      },
++      { status: result.status || 200 },
++    );
++
++    // Propagate the Set-Cookie headers (session token, session data,
++    // etc.) emitted by `setSessionCookie` in the token-auth plugin so
++    // the browser receives a standard better-auth session cookie.
++    if (headers && typeof (headers as any).forEach === 'function') {
++      (headers as Headers).forEach((value, key) => {
++        res.headers.append(key, value);
++      });
++    }
++
++    return res;
++  } catch (error: any) {
++    log('Token route error: %s', error?.message || error);
++    return NextResponse.json(
++      { error: error?.message || '服务器内部错误' },
++      { status: 500 },
++    );
++  }
++}
 diff --git a/src/libs/better-auth/define-config.ts b/src/libs/better-auth/define-config.ts
-index bad967f06..3d497608b 100644
+index bad967f06e..3c80097de6 100644
 --- a/src/libs/better-auth/define-config.ts
 +++ b/src/libs/better-auth/define-config.ts
 @@ -21,6 +21,7 @@ import {
@@ -42,144 +142,335 @@ index bad967f06..3d497608b 100644
  import { initBetterAuthSSOProviders } from '@/libs/better-auth/sso';
  import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/utils/config';
  import { parseSSOProviders } from '@/libs/better-auth/utils/server';
-@@ -276,6 +277,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
-     plugins: [
+@@ -168,15 +169,15 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
+         const isChangeEmail = request?.url?.includes('/change-email');
+         const template = isChangeEmail
+           ? getChangeEmailVerificationTemplate({
+-              expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
+-              url,
+-              userName: user.name,
+-            })
++            expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
++            url,
++            userName: user.name,
++          })
+           : getVerificationEmailTemplate({
+-              expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
+-              url,
+-              userName: user.name,
+-            });
++            expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
++            url,
++            userName: user.name,
++          });
+ 
+         const emailService = new EmailService();
+         await emailService.sendMail({
+@@ -277,6 +278,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
        ...customOptions.plugins,
        emailWhitelist(),
-+      tokenAuth(),
        expo(),
++      tokenAuth(),
        admin(),
        // Email OTP plugin for mobile verification
+       emailOTP({
+@@ -314,29 +316,29 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
+       }),
+       ...(genericOAuthProviders.length > 0
+         ? [
+-            genericOAuth({
+-              config: genericOAuthProviders,
+-            }),
+-          ]
++          genericOAuth({
++            config: genericOAuthProviders,
++          }),
++        ]
+         : []),
+       ...(enableMagicLink
+         ? [
+-            magicLink({
+-              expiresIn: MAGIC_LINK_EXPIRES_IN,
+-              sendMagicLink: async ({ email, url }) => {
+-                const template = getMagicLinkEmailTemplate({
+-                  expiresInSeconds: MAGIC_LINK_EXPIRES_IN,
+-                  url,
+-                });
++          magicLink({
++            expiresIn: MAGIC_LINK_EXPIRES_IN,
++            sendMagicLink: async ({ email, url }) => {
++              const template = getMagicLinkEmailTemplate({
++                expiresInSeconds: MAGIC_LINK_EXPIRES_IN,
++                url,
++              });
+ 
+-                const emailService = new EmailService();
+-                await emailService.sendMail({
+-                  to: email,
+-                  ...template,
+-                });
+-              },
+-            }),
+-          ]
++              const emailService = new EmailService();
++              await emailService.sendMail({
++                to: email,
++                ...template,
++              });
++            },
++          }),
++        ]
+         : []),
+     ],
+   } satisfies BetterAuthOptions;
 diff --git a/src/libs/better-auth/plugins/token-auth.ts b/src/libs/better-auth/plugins/token-auth.ts
 new file mode 100644
-index 000000000..da6a0bd76
+index 0000000000..881c46fe5b
 --- /dev/null
 +++ b/src/libs/better-auth/plugins/token-auth.ts
-@@ -0,0 +1,126 @@
-+import { APIError } from 'better-auth/api';
-+import { type BetterAuthPlugin } from 'better-auth/types';
+@@ -0,0 +1,124 @@
++import debug from 'debug';
++import { APIError, createAuthEndpoint } from 'better-auth/api';
++import { setSessionCookie } from 'better-auth/cookies';
++import { z } from 'zod';
 +
-+import { authEnv } from '@/envs/auth';
++import { authorizeToken } from '@/libs/better-auth/sso/providers/token';
 +
-+const getNestedValue = (obj: Record<string, unknown>, path: string): unknown => {
-+  return path.split('.').reduce((current, key) => {
-+    if (current && typeof current === 'object' && key in current) {
-+      return (current as Record<string, unknown>)[key];
-+    }
-+    return undefined;
-+  }, obj);
-+};
++const log = debug('middleware:auth:token-auth');
 +
-+export const tokenAuth = (): BetterAuthPlugin => ({
++/**
++ * Token-based authentication plugin.
++ *
++ * Exposes `POST /token/sign-in` (server-side `auth.api.tokenSignIn`) which:
++ *  1. Validates the user-supplied token against the configured upstream.
++ *  2. Looks up the user by email — or creates one with `emailVerified=true`
++ *     (no password required, since trust is delegated to the upstream).
++ *  3. Issues a better-auth session and attaches the session cookies to
++ *     the response.
++ *
++ * Kept intentionally small so it can be invoked either via HTTP from an
++ * untrusted client (if enabled in the token provider) or programmatically
++ * from a trusted Next.js API route via `auth.api.tokenSignIn({ body })`.
++ */
++export const tokenAuth = () => ({
 +  id: 'token-auth',
-+  init() {
-+    if (!authEnv.AUTH_TOKEN_AUTH_ENABLED || !authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL) {
-+      return {};
-+    }
-+
-+    return {
-+      apiRoutes: {
-+        '/sign-in/token': {
-+          POST: async (request, context) => {
-+            const { token } = await request.json();
-+
-+            if (!token) {
-+              throw new APIError('BAD_REQUEST', {
-+                code: 'TOKEN_REQUIRED',
-+                message: 'Token is required',
-+              });
-+            }
-+
-+            const userInfoUrl = authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL;
-+            const emailPath = authEnv.AUTH_TOKEN_AUTH_EMAIL_PATH || 'email';
-+            const namePath = authEnv.AUTH_TOKEN_AUTH_NAME_PATH || 'name';
-+            const avatarPath = authEnv.AUTH_TOKEN_AUTH_AVATAR_PATH || 'avatar';
-+            const idPath = authEnv.AUTH_TOKEN_AUTH_ID_PATH || 'id';
-+            const emailSuffix = authEnv.AUTH_TOKEN_AUTH_EMAIL_SUFFIX || '@lobehub.com';
-+
-+            const headers: Record<string, string> = {
-+              Authorization: `Bearer ${token}`,
-+            };
-+
-+            let userInfoResponse;
-+            try {
-+              userInfoResponse = await fetch(userInfoUrl, { headers });
-+            } catch (error) {
-+              throw new APIError('INTERNAL_SERVER_ERROR', {
-+                code: 'USER_INFO_FETCH_FAILED',
-+                message: 'Failed to fetch user info',
-+              });
-+            }
-+
-+            if (!userInfoResponse.ok) {
-+              throw new APIError('UNAUTHORIZED', {
-+                code: 'INVALID_TOKEN',
-+                message: 'Invalid token',
-+              });
-+            }
-+
-+            const userInfo = (await userInfoResponse.json()) as Record<string, unknown>;
-+
-+            let email = getNestedValue(userInfo, emailPath) as string | undefined;
-+            const name = getNestedValue(userInfo, namePath) as string | undefined;
-+            const avatar = getNestedValue(userInfo, avatarPath) as string | undefined;
-+            const externalId = getNestedValue(userInfo, idPath) as string | undefined;
-+
-+            if (!email) {
-+              email = name + emailSuffix;
-+            }
-+
-+            let user = await context.database.getUserByEmail(email);
-+
-+            if (!user) {
-+              user = await context.database.createUser({
-+                email,
-+                emailVerified: true,
-+                ...(name && { name }),
-+                ...(avatar && { image: avatar }),
-+              });
-+            }
-+
-+            const session = await context.database.createSession({
-+              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-+              userId: user.id,
-+            });
-+
-+            const response = new Response(
-+              JSON.stringify({
-+                data: {
-+                  session,
-+                  user,
-+                },
-+                success: true,
-+              }),
-+              {
-+                headers: {
-+                  'Content-Type': 'application/json',
++  endpoints: {
++    tokenSignIn: createAuthEndpoint(
++      '/token/sign-in',
++      {
++        method: 'POST',
++        body: z.object({
++          token: z.string().min(1),
++        }),
++        requireHeaders: true,
++        metadata: {
++          openapi: {
++            description: 'Sign in / sign up with a delegated token',
++            operationId: 'tokenSignIn',
++            responses: {
++              200: {
++                description: 'Authenticated',
++                content: {
++                  'application/json': {
++                    schema: {
++                      properties: {
++                        token: { type: 'string' },
++                        user: {
++                          properties: {
++                            createdAt: { type: 'string' },
++                            email: { type: 'string' },
++                            emailVerified: { type: 'boolean' },
++                            id: { type: 'string' },
++                            image: { type: 'string', nullable: true },
++                            name: { type: 'string' },
++                            updatedAt: { type: 'string' },
++                          },
++                          type: 'object',
++                        },
++                      },
++                      type: 'object',
++                    },
++                  },
 +                },
 +              },
-+            );
-+
-+            const cookieOptions = {
-+              domain: context.options.cookies?.domain,
-+              httpOnly: true,
-+              path: '/',
-+              sameSite: 'lax' as const,
-+              secure: context.options.cookies?.secure ?? process.env.NODE_ENV === 'production',
-+            };
-+
-+            response.headers.set(
-+              'Set-Cookie',
-+              `${context.options.cookies?.name ?? 'auth_session'}=${session.id}; ${Object.entries(cookieOptions)
-+                .map(([key, value]) => `${key}=${value}`)
-+                .join('; ')}`,
-+            );
-+
-+            return response;
++            },
++            summary: 'Sign in / sign up with a delegated token',
 +          },
 +        },
 +      },
-+    };
++      async (ctx) => {
++        const userInfo = await authorizeToken({ token: ctx.body.token });
++        if (!userInfo) {
++          log('Token validation failed');
++          throw new APIError('UNAUTHORIZED', { message: 'INVALID_TOKEN' });
++        }
++
++        log('User info retrieved: %s', userInfo);
++
++        const email = String(userInfo.email).toLowerCase().trim();
++        let user: any = await ctx.context.internalAdapter.findUserByEmail(email);
++        // Some adapters return `{ user, accounts }` shape; normalize.
++        if (user && (user as any).user) user = (user as any).user;
++
++        if (!user) {
++          log('User does not exist, creating new user...', { email });
++          user = await ctx.context.internalAdapter.createUser({
++            email,
++            emailVerified: true,
++            name: userInfo.name || email,
++          });
++          if (!user) {
++            throw new APIError('INTERNAL_SERVER_ERROR', {
++              message: 'FAILED_TO_CREATE_USER',
++            });
++          }
++        }
++
++        const session: any = await ctx.context.internalAdapter.createSession(user.id);
++        if (!session) {
++          throw new APIError('INTERNAL_SERVER_ERROR', {
++            message: 'FAILED_TO_CREATE_SESSION',
++          });
++        }
++
++        await setSessionCookie(ctx as any, { session, user });
++
++        return ctx.json({
++          token: session.token,
++          user: {
++            createdAt: (user as any).createdAt,
++            email: (user as any).email,
++            emailVerified: (user as any).emailVerified,
++            id: (user as any).id,
++            image: (user as any).image,
++            name: (user as any).name,
++            updatedAt: (user as any).updatedAt,
++          },
++        });
++      },
++    ),
 +  },
 +});
++
++export type TokenAuthPlugin = ReturnType<typeof tokenAuth>;
+diff --git a/src/libs/better-auth/sso/index.ts b/src/libs/better-auth/sso/index.ts
+index 84eb425fa1..f2665fe04c 100644
+--- a/src/libs/better-auth/sso/index.ts
++++ b/src/libs/better-auth/sso/index.ts
+@@ -23,6 +23,7 @@ import Microsoft from './providers/microsoft';
+ import Okta from './providers/okta';
+ import Wechat from './providers/wechat';
+ import Zitadel from './providers/zitadel';
++import Token from './providers/token';
+ 
+ const providerDefinitions = [
+   Apple,
+@@ -42,6 +43,7 @@ const providerDefinitions = [
+   Zitadel,
+   Feishu,
+   Wechat,
++  Token,
+ ] as const;
+ 
+ const builtInProviderIds = new Set(BUILTIN_BETTER_AUTH_PROVIDERS);
+diff --git a/src/libs/better-auth/sso/providers/token.ts b/src/libs/better-auth/sso/providers/token.ts
+new file mode 100644
+index 0000000000..4e0202def6
+--- /dev/null
++++ b/src/libs/better-auth/sso/providers/token.ts
+@@ -0,0 +1,94 @@
++import debug from 'debug';
++import { authEnv } from '@/envs/auth';
++
++const log = debug('middleware:auth:token-provider');
++
++export const tokenCredentials = {
++    id: 'token',
++    name: 'Token Authentication',
++    type: 'credentials' as const,
++
++    credentials: {
++        token: { label: 'Token', type: 'text' },
++    },
++
++    async authorize(credentials: { token?: string }) {
++        const rawToken = credentials.token?.trim();
++
++        if (!rawToken) {
++            log('Token is empty or missing');
++            return null;
++        }
++
++        if (!authEnv.AUTH_TOKEN_AUTH_ENABLED || authEnv.AUTH_TOKEN_AUTH_ENABLED === '0') {
++            log('Provider is disabled via AUTH_TOKEN_AUTH_ENABLED');
++            return null;
++        }
++
++        if (!authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL) {
++            log('AUTH_TOKEN_AUTH_USER_INFO_URL is not configured');
++            return null;
++        }
++
++        try {
++            log('Fetching user info with token (length: %d)', rawToken.length);
++
++            const url = new URL(authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL);
++            url.searchParams.append('token', rawToken);   // Token 作为 GET 参数
++
++            const response = await fetch(url.toString(), {
++                method: 'GET',
++                headers: {
++                    'Content-Type': 'application/json',
++                    Accept: 'application/json',
++                },
++                signal: AbortSignal.timeout(10000), // 10秒超时
++            });
++
++            if (!response.ok) {
++                log('User info API error: %d %s', response.status, response.statusText);
++                return null;
++            }
++
++            const data = await response.json();
++
++            const getPath = (obj: any, path?: string) => {
++                if (!path || !obj) return undefined;
++                return path.split('.').reduce((o, key) => (o?.[key] !== undefined ? o[key] : undefined), obj);
++            };
++
++            let email = getPath(data, authEnv.AUTH_TOKEN_AUTH_EMAIL_PATH);
++            const userId = getPath(data, authEnv.AUTH_TOKEN_AUTH_ID_PATH) || rawToken;
++            const name = getPath(data, authEnv.AUTH_TOKEN_AUTH_NAME_PATH);
++
++            if (!email) {
++                email = `${String(userId)}${authEnv.AUTH_TOKEN_AUTH_EMAIL_SUFFIX || '@lobehub.com'}`;
++            }
++
++            if (!email || !userId) {
++                log('Missing email or userId in API response');
++                return null;
++            }
++
++            const user = {
++                id: String(userId),
++                email: String(email).toLowerCase().trim(),
++                name: String(name || email).trim(),
++            };
++
++            log('User authenticated successfully: %s', user.email);
++            return user;
++
++        } catch (error: any) {
++            if (error.name === 'AbortError') {
++                log('Request timeout');
++            } else {
++                log('Error occurred: %s', error?.message || error);
++            }
++            return null;
++        }
++    },
++};
++
++export { tokenCredentials as default };
++export const authorizeToken = tokenCredentials.authorize;
 \ No newline at end of file
