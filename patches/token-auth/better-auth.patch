@@ -1,0 +1,40 @@
+diff --git a/src/libs/better-auth/define-config.ts b/src/libs/better-auth/define-config.ts
+index bad967f06..3d497608b 100644
+--- a/src/libs/better-auth/define-config.ts
++++ b/src/libs/better-auth/define-config.ts
+@@ -21,6 +21,7 @@ import {
+   getVerificationOTPEmailTemplate,
+ } from '@/libs/better-auth/email-templates';
+ import { emailWhitelist } from '@/libs/better-auth/plugins/email-whitelist';
++import { tokenAuth } from '@/libs/better-auth/plugins/token-auth';
+ import { initBetterAuthSSOProviders } from '@/libs/better-auth/sso';
+ import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/utils/config';
+ import { parseSSOProviders } from '@/libs/better-auth/utils/server';
+@@ -276,6 +277,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
+     plugins: [
+       ...customOptions.plugins,
+       emailWhitelist(),
++      tokenAuth(),
+       expo(),
+       admin(),
+       // Email OTP plugin for mobile verification
+diff --git a/src/libs/better-auth/sso/index.ts b/src/libs/better-auth/sso/index.ts
+index 84eb425fa..7087929e6 100644
+--- a/src/libs/better-auth/sso/index.ts
++++ b/src/libs/better-auth/sso/index.ts
+@@ -21,6 +21,7 @@ import Keycloak from './providers/keycloak';
+ import Logto from './providers/logto';
+ import Microsoft from './providers/microsoft';
+ import Okta from './providers/okta';
++import Token from './providers/token';
+ import Wechat from './providers/wechat';
+ import Zitadel from './providers/zitadel';
+ 
+@@ -42,6 +43,7 @@ const providerDefinitions = [
+   Zitadel,
+   Feishu,
+   Wechat,
++  Token,
+ ] as const;
+ 
+ const builtInProviderIds = new Set(BUILTIN_BETTER_AUTH_PROVIDERS);

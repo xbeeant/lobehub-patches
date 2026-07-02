@@ -1,62 +1,15 @@
-diff --git a/packages/env/src/auth.ts b/packages/env/src/auth.ts
-index 422fe85c87..1380a20943 100644
---- a/packages/env/src/auth.ts
-+++ b/packages/env/src/auth.ts
-@@ -92,6 +92,15 @@ declare global {
-        */
-       INTERNAL_JWT_EXPIRATION?: string;
- 
-+      // ==================== Token Auth Provider ====================
-+      AUTH_TOKEN_AUTH_ENABLED?: '0' | '1';
-+      AUTH_TOKEN_AUTH_USER_INFO_URL?: string;
-+      AUTH_TOKEN_AUTH_EMAIL_PATH?: string;
-+      AUTH_TOKEN_AUTH_EMAIL_SUFFIX?: string;
-+      AUTH_TOKEN_AUTH_ID_PATH?: string;
-+      AUTH_TOKEN_AUTH_NAME_PATH?: string;
-+      // ============================================================
-+
-       // ===== JWKS Key ===== //
-       /**
-        * Generic JWKS key for signing/verifying JWTs.
-@@ -196,6 +205,14 @@ export const getAuthConfig = () => {
- 
-       // Internal JWT expiration time (e.g., '10s', '1m', '1h')
-       INTERNAL_JWT_EXPIRATION: z.string().default('30s'),
-+
-+      // URL-query token authentication
-+      AUTH_TOKEN_AUTH_ENABLED: z.enum(['0', '1']).optional().default('0'),
-+      AUTH_TOKEN_AUTH_USER_INFO_URL: z.string().url().optional(),
-+      AUTH_TOKEN_AUTH_EMAIL_PATH: z.string().optional(),
-+      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: z.string().optional(),
-+      AUTH_TOKEN_AUTH_ID_PATH: z.string().optional(),
-+      AUTH_TOKEN_AUTH_NAME_PATH: z.string().optional(),
-     },
- 
-     runtimeEnv: {
-@@ -289,6 +306,14 @@ export const getAuthConfig = () => {
- 
-       // Internal JWT expiration time
-       INTERNAL_JWT_EXPIRATION: process.env.INTERNAL_JWT_EXPIRATION,
-+
-+      // URL-query token authentication
-+      AUTH_TOKEN_AUTH_ENABLED: process.env.AUTH_TOKEN_AUTH_ENABLED,
-+      AUTH_TOKEN_AUTH_USER_INFO_URL: process.env.AUTH_TOKEN_AUTH_USER_INFO_URL,
-+      AUTH_TOKEN_AUTH_EMAIL_PATH: process.env.AUTH_TOKEN_AUTH_EMAIL_PATH,
-+      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: process.env.AUTH_TOKEN_AUTH_EMAIL_SUFFIX,
-+      AUTH_TOKEN_AUTH_ID_PATH: process.env.AUTH_TOKEN_AUTH_ID_PATH,
-+      AUTH_TOKEN_AUTH_NAME_PATH: process.env.AUTH_TOKEN_AUTH_NAME_PATH,
-     },
-   });
- };
 diff --git a/src/app/(backend)/api/auth/token/route.ts b/src/app/(backend)/api/auth/token/route.ts
 new file mode 100644
-index 0000000000..87ffecbde3
+index 000000000..0904096bf
 --- /dev/null
 +++ b/src/app/(backend)/api/auth/token/route.ts
-@@ -0,0 +1,76 @@
-+import { NextRequest, NextResponse } from 'next/server';
+@@ -0,0 +1,73 @@
 +import debug from 'debug';
++import type { NextRequest} from 'next/server';
++import { NextResponse } from 'next/server';
++
 +import { auth } from '@/auth';
++import { appEnv } from '@/envs/app';
 +
 +const log = debug('middleware:auth:token-route');
 +
@@ -103,14 +56,7 @@ index 0000000000..87ffecbde3
 +
 +    log('Token auth completed successfully for user: %s', response.user.email);
 +
-+    const res = NextResponse.json(
-+      {
-+        success: true,
-+        user: response.user,
-+        session: { token: response.token },
-+      },
-+      { status: result.status || 200 },
-+    );
++    const res = NextResponse.redirect(appEnv.APP_URL || '/');
 +
 +    // Propagate the Set-Cookie headers (session token, session data,
 +    // etc.) emitted by `setSessionCookie` in the token-auth plugin so
@@ -121,6 +67,7 @@ index 0000000000..87ffecbde3
 +      });
 +    }
 +
++
 +    return res;
 +  } catch (error: any) {
 +    log('Token route error: %s', error?.message || error);
@@ -130,108 +77,16 @@ index 0000000000..87ffecbde3
 +    );
 +  }
 +}
-diff --git a/src/libs/better-auth/define-config.ts b/src/libs/better-auth/define-config.ts
-index bad967f06e..3c80097de6 100644
---- a/src/libs/better-auth/define-config.ts
-+++ b/src/libs/better-auth/define-config.ts
-@@ -21,6 +21,7 @@ import {
-   getVerificationOTPEmailTemplate,
- } from '@/libs/better-auth/email-templates';
- import { emailWhitelist } from '@/libs/better-auth/plugins/email-whitelist';
-+import { tokenAuth } from '@/libs/better-auth/plugins/token-auth';
- import { initBetterAuthSSOProviders } from '@/libs/better-auth/sso';
- import { createSecondaryStorage, getTrustedOrigins } from '@/libs/better-auth/utils/config';
- import { parseSSOProviders } from '@/libs/better-auth/utils/server';
-@@ -168,15 +169,15 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
-         const isChangeEmail = request?.url?.includes('/change-email');
-         const template = isChangeEmail
-           ? getChangeEmailVerificationTemplate({
--              expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
--              url,
--              userName: user.name,
--            })
-+            expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
-+            url,
-+            userName: user.name,
-+          })
-           : getVerificationEmailTemplate({
--              expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
--              url,
--              userName: user.name,
--            });
-+            expiresInSeconds: VERIFICATION_LINK_EXPIRES_IN,
-+            url,
-+            userName: user.name,
-+          });
- 
-         const emailService = new EmailService();
-         await emailService.sendMail({
-@@ -277,6 +278,7 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
-       ...customOptions.plugins,
-       emailWhitelist(),
-       expo(),
-+      tokenAuth(),
-       admin(),
-       // Email OTP plugin for mobile verification
-       emailOTP({
-@@ -314,29 +316,29 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
-       }),
-       ...(genericOAuthProviders.length > 0
-         ? [
--            genericOAuth({
--              config: genericOAuthProviders,
--            }),
--          ]
-+          genericOAuth({
-+            config: genericOAuthProviders,
-+          }),
-+        ]
-         : []),
-       ...(enableMagicLink
-         ? [
--            magicLink({
--              expiresIn: MAGIC_LINK_EXPIRES_IN,
--              sendMagicLink: async ({ email, url }) => {
--                const template = getMagicLinkEmailTemplate({
--                  expiresInSeconds: MAGIC_LINK_EXPIRES_IN,
--                  url,
--                });
-+          magicLink({
-+            expiresIn: MAGIC_LINK_EXPIRES_IN,
-+            sendMagicLink: async ({ email, url }) => {
-+              const template = getMagicLinkEmailTemplate({
-+                expiresInSeconds: MAGIC_LINK_EXPIRES_IN,
-+                url,
-+              });
- 
--                const emailService = new EmailService();
--                await emailService.sendMail({
--                  to: email,
--                  ...template,
--                });
--              },
--            }),
--          ]
-+              const emailService = new EmailService();
-+              await emailService.sendMail({
-+                to: email,
-+                ...template,
-+              });
-+            },
-+          }),
-+        ]
-         : []),
-     ],
-   } satisfies BetterAuthOptions;
+\ No newline at end of file
 diff --git a/src/libs/better-auth/plugins/token-auth.ts b/src/libs/better-auth/plugins/token-auth.ts
 new file mode 100644
-index 0000000000..881c46fe5b
+index 000000000..a8f975c44
 --- /dev/null
 +++ b/src/libs/better-auth/plugins/token-auth.ts
 @@ -0,0 +1,124 @@
-+import debug from 'debug';
 +import { APIError, createAuthEndpoint } from 'better-auth/api';
 +import { setSessionCookie } from 'better-auth/cookies';
++import debug from 'debug';
 +import { z } from 'zod';
 +
 +import { authorizeToken } from '@/libs/better-auth/sso/providers/token';
@@ -353,33 +208,15 @@ index 0000000000..881c46fe5b
 +});
 +
 +export type TokenAuthPlugin = ReturnType<typeof tokenAuth>;
-diff --git a/src/libs/better-auth/sso/index.ts b/src/libs/better-auth/sso/index.ts
-index 84eb425fa1..f2665fe04c 100644
---- a/src/libs/better-auth/sso/index.ts
-+++ b/src/libs/better-auth/sso/index.ts
-@@ -23,6 +23,7 @@ import Microsoft from './providers/microsoft';
- import Okta from './providers/okta';
- import Wechat from './providers/wechat';
- import Zitadel from './providers/zitadel';
-+import Token from './providers/token';
- 
- const providerDefinitions = [
-   Apple,
-@@ -42,6 +43,7 @@ const providerDefinitions = [
-   Zitadel,
-   Feishu,
-   Wechat,
-+  Token,
- ] as const;
- 
- const builtInProviderIds = new Set(BUILTIN_BETTER_AUTH_PROVIDERS);
+\ No newline at end of file
 diff --git a/src/libs/better-auth/sso/providers/token.ts b/src/libs/better-auth/sso/providers/token.ts
 new file mode 100644
-index 0000000000..4e0202def6
+index 000000000..17c99ed92
 --- /dev/null
 +++ b/src/libs/better-auth/sso/providers/token.ts
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,97 @@
 +import debug from 'debug';
++
 +import { authEnv } from '@/envs/auth';
 +
 +const log = debug('middleware:auth:token-provider');
@@ -415,7 +252,9 @@ index 0000000000..4e0202def6
 +            log('Fetching user info with token (length: %d)', rawToken.length);
 +
 +            const url = new URL(authEnv.AUTH_TOKEN_AUTH_USER_INFO_URL);
-+            url.searchParams.append('token', rawToken);   // Token 作为 GET 参数
++            url.searchParams.append(authEnv.AUTH_TOKEN_PARAM_NAME || 'token', rawToken);
++            
++            log('Request URL: %s', url.toString());
 +
 +            const response = await fetch(url.toString(), {
 +                method: 'GET',
@@ -439,11 +278,11 @@ index 0000000000..4e0202def6
 +            };
 +
 +            let email = getPath(data, authEnv.AUTH_TOKEN_AUTH_EMAIL_PATH);
-+            const userId = getPath(data, authEnv.AUTH_TOKEN_AUTH_ID_PATH) || rawToken;
++            const userId = getPath(data, authEnv.AUTH_TOKEN_AUTH_ID_PATH);
 +            const name = getPath(data, authEnv.AUTH_TOKEN_AUTH_NAME_PATH);
 +
 +            if (!email) {
-+                email = `${String(userId)}${authEnv.AUTH_TOKEN_AUTH_EMAIL_SUFFIX || '@lobehub.com'}`;
++                email = `${String(name)}${authEnv.AUTH_TOKEN_AUTH_EMAIL_SUFFIX || '@lobehub.com'}`;
 +            }
 +
 +            if (!email || !userId) {

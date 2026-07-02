@@ -1,0 +1,71 @@
+diff --git a/packages/env/src/auth.ts b/packages/env/src/auth.ts
+index 422fe85c8..d742f406f 100644
+--- a/packages/env/src/auth.ts
++++ b/packages/env/src/auth.ts
+@@ -74,15 +74,23 @@ declare global {
+       // ===== Better Auth ===== //
+       AUTH_SECRET?: string;
+       AUTH_SSO_PROVIDERS?: string;
++      AUTH_TOKEN_AUTH_EMAIL_PATH?: string;
++
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX?: string;
++      // ==================== Token Auth Provider ====================
++      AUTH_TOKEN_AUTH_ENABLED?: '0' | '1';
++
++      AUTH_TOKEN_AUTH_ID_PATH?: string;
++      AUTH_TOKEN_AUTH_NAME_PATH?: string;
++      AUTH_TOKEN_AUTH_USER_INFO_URL?: string;
++      AUTH_TOKEN_PARAM_NAME?: string;
+       AUTH_TRUSTED_ORIGINS?: string;
+ 
+       AUTH_WECHAT_ID?: string;
+       AUTH_WECHAT_SECRET?: string;
+-
+       AUTH_ZITADEL_ID?: string;
+       AUTH_ZITADEL_ISSUER?: string;
+       AUTH_ZITADEL_SECRET?: string;
+-
+       /**
+        * Internal JWT expiration time for lambda → async calls.
+        * Format: number followed by unit (s=seconds, m=minutes, h=hours)
+@@ -91,6 +99,7 @@ declare global {
+        * @default '30s'
+        */
+       INTERNAL_JWT_EXPIRATION?: string;
++      // ============================================================
+ 
+       // ===== JWKS Key ===== //
+       /**
+@@ -194,6 +203,16 @@ export const getAuthConfig = () => {
+       JWKS_KEY: z.string().optional(),
+       ENABLE_OIDC: z.boolean(),
+ 
++
++      // URL-query token authentication
++      AUTH_TOKEN_AUTH_ENABLED: z.enum(['0', '1']).optional().default('0'),
++      AUTH_TOKEN_PARAM_NAME: z.string().optional().default('token'),
++      AUTH_TOKEN_AUTH_USER_INFO_URL: z.string().url().optional(),
++      AUTH_TOKEN_AUTH_EMAIL_PATH: z.string().optional(),
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: z.string().optional(),
++      AUTH_TOKEN_AUTH_ID_PATH: z.string().optional(),
++      AUTH_TOKEN_AUTH_NAME_PATH: z.string().optional(),
++
+       // Internal JWT expiration time (e.g., '10s', '1m', '1h')
+       INTERNAL_JWT_EXPIRATION: z.string().default('30s'),
+     },
+@@ -287,6 +306,15 @@ export const getAuthConfig = () => {
+       JWKS_KEY: process.env.JWKS_KEY,
+       ENABLE_OIDC: !!process.env.JWKS_KEY,
+ 
++      // URL-query token authentication
++      AUTH_TOKEN_AUTH_ENABLED: process.env.AUTH_TOKEN_AUTH_ENABLED,
++      AUTH_TOKEN_PARAM_NAME: process.env.AUTH_TOKEN_PARAM_NAME,
++      AUTH_TOKEN_AUTH_USER_INFO_URL: process.env.AUTH_TOKEN_AUTH_USER_INFO_URL,
++      AUTH_TOKEN_AUTH_EMAIL_PATH: process.env.AUTH_TOKEN_AUTH_EMAIL_PATH,
++      AUTH_TOKEN_AUTH_EMAIL_SUFFIX: process.env.AUTH_TOKEN_AUTH_EMAIL_SUFFIX,
++      AUTH_TOKEN_AUTH_ID_PATH: process.env.AUTH_TOKEN_AUTH_ID_PATH,
++      AUTH_TOKEN_AUTH_NAME_PATH: process.env.AUTH_TOKEN_AUTH_NAME_PATH,
++
+       // Internal JWT expiration time
+       INTERNAL_JWT_EXPIRATION: process.env.INTERNAL_JWT_EXPIRATION,
+     },
