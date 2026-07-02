@@ -24,12 +24,20 @@ jobs:
     - name: Apply patchs
       working-directory: target-repo   # 在目标仓库目录下执行
       run: |
-        for patch in ../patch-repo/patches/*.patch; do
-          # 检查是否有匹配的文件，防止没有补丁时执行报错
-          [ -e "$patch" ] || continue 
-          echo "Applying patch: $patch"
-          git apply --ignore-whitespace "$patch"
+        echo "Searching for patches in ../patch-repo/patches..."
+        
+        # 1. 使用 find 查找所有 .patch 文件
+        # 2. sort 确保按文件名排序执行（例如先执行 disable 再执行 token-auth）
+        # 3. xargs 将找到的文件传递给 git apply
+        find ../patch-repo/patches -name "*.patch" | sort | while read patch_file; do
+          echo "Applying: $patch_file"
+          if ! git apply --ignore-whitespace "$patch_file"; then
+            echo "::error::Failed to apply patch: $patch_file"
+            exit 1
+          fi
         done
+        
+        echo "All patches applied successfully."
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
