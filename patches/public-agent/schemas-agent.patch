@@ -1,0 +1,22 @@
+diff --git a/packages/database/src/schemas/agent.ts b/packages/database/src/schemas/agent.ts
+index 7f6e3c898f..89c62144ca 100644
+--- a/packages/database/src/schemas/agent.ts
++++ b/packages/database/src/schemas/agent.ts
+@@ -21,6 +21,7 @@ import { z } from 'zod';
+ import { idGenerator, randomSlug } from '../utils/idGenerator';
+ import { timestamps } from './_helpers';
+ import { files, knowledgeBases } from './file';
++import { publicAgents } from './publicAgent';
+ import { sessionGroups } from './session';
+ import { users } from './user';
+ import { workspaces } from './workspace';
+@@ -45,6 +46,9 @@ export const agents = pgTable(
+     backgroundColor: text('background_color'),
+     marketIdentifier: text('market_identifier'),
+ 
++    publicAgentId: text('public_agent_id').references(() => publicAgents.id, { onDelete: 'set null' }),
++    syncedVersion: varchar('synced_version', { length: 50 }),
++
+     plugins: jsonb('plugins').$type<string[]>(),
+ 
+     clientId: text('client_id'),

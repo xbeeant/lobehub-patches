@@ -1,0 +1,200 @@
+diff --git a/packages/database/migrations/0117_add_public_agents.sql b/packages/database/migrations/0117_add_public_agents.sql
+new file mode 100644
+index 0000000000..aa3097f3bd
+--- /dev/null
++++ b/packages/database/migrations/0117_add_public_agents.sql
+@@ -0,0 +1,37 @@
++CREATE TABLE IF NOT EXISTS "public_agents" (
++	"id" text PRIMARY KEY NOT NULL,
++	"slug" varchar(100),
++	"title" varchar(255) NOT NULL,
++	"description" varchar(1000),
++	"tags" jsonb DEFAULT '[]'::jsonb,
++	"avatar" text,
++	"background_color" text,
++	"plugins" jsonb,
++	"agency_config" jsonb,
++	"chat_config" jsonb,
++	"few_shots" jsonb,
++	"model" text,
++	"params" jsonb DEFAULT '{}'::jsonb,
++	"provider" text,
++	"system_role" text,
++	"tts" jsonb,
++	"opening_message" text,
++	"opening_questions" text[],
++	"mcp_config" jsonb,
++	"skills_config" jsonb,
++	"version" varchar(50) DEFAULT '1.0.0',
++	"is_active" boolean DEFAULT true,
++	"created_at" timestamp DEFAULT now() NOT NULL,
++	"updated_at" timestamp DEFAULT now() NOT NULL,
++	"accessed_at" timestamp DEFAULT now() NOT NULL
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS "public_agents_slug_unique" ON "public_agents" USING btree ("slug");
++CREATE INDEX IF NOT EXISTS "public_agents_title_idx" ON "public_agents" USING btree ("title");
++CREATE INDEX IF NOT EXISTS "public_agents_is_active_idx" ON "public_agents" USING btree ("is_active");
++
++ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "public_agent_id" text;
++ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "synced_version" varchar(50);
++ALTER TABLE "agents" ADD CONSTRAINT "agents_public_agent_id_fkey" FOREIGN KEY ("public_agent_id") REFERENCES "public_agents"("id") ON DELETE SET NULL;
++CREATE INDEX IF NOT EXISTS "agents_public_agent_id_idx" ON "agents" USING btree ("public_agent_id");
++CREATE INDEX IF NOT EXISTS "agents_synced_version_idx" ON "agents" USING btree ("synced_version");
+\ No newline at end of file
+diff --git a/packages/database/src/models/publicAgent.ts b/packages/database/src/models/publicAgent.ts
+new file mode 100644
+index 0000000000..bb9eebebc3
+--- /dev/null
++++ b/packages/database/src/models/publicAgent.ts
+@@ -0,0 +1,66 @@
++import { eq, inArray } from 'drizzle-orm';
++
++import { publicAgents } from '../schemas';
++import type { NewPublicAgent, PublicAgentItem } from '../schemas/publicAgent';
++import type { LobeChatDatabase } from '../type';
++
++export class PublicAgentModel {
++  private db: LobeChatDatabase;
++
++  constructor(db: LobeChatDatabase) {
++    this.db = db;
++  }
++
++  getAll = async (options?: { isActive?: boolean }): Promise<PublicAgentItem[]> => {
++    const where = options?.isActive !== undefined ? eq(publicAgents.isActive, options.isActive) : undefined;
++
++    return this.db.query.publicAgents.findMany({
++      orderBy: (publicAgents, { desc }) => [desc(publicAgents.createdAt)],
++      where,
++    });
++  };
++
++  getById = async (id: string): Promise<PublicAgentItem | null> => {
++    return this.db.query.publicAgents.findFirst({
++      where: eq(publicAgents.id, id),
++    });
++  };
++
++  getBySlug = async (slug: string): Promise<PublicAgentItem | null> => {
++    return this.db.query.publicAgents.findFirst({
++      where: eq(publicAgents.slug, slug),
++    });
++  };
++
++  create = async (config: NewPublicAgent): Promise<PublicAgentItem> => {
++    const [result] = await this.db.insert(publicAgents).values([config]).returning();
++    return result;
++  };
++
++  batchCreate = async (configs: NewPublicAgent[]): Promise<PublicAgentItem[]> => {
++    if (configs.length === 0) return [];
++    return this.db.insert(publicAgents).values(configs).returning();
++  };
++
++  update = async (id: string, data: Partial<PublicAgentItem>): Promise<PublicAgentItem | null> => {
++    const [result] = await this.db
++      .update(publicAgents)
++      .set({ ...data, updatedAt: new Date() })
++      .where(eq(publicAgents.id, id))
++      .returning();
++    return result ?? null;
++  };
++
++  delete = async (id: string): Promise<void> => {
++    await this.db.delete(publicAgents).where(eq(publicAgents.id, id));
++  };
++
++  batchDelete = async (ids: string[]): Promise<void> => {
++    if (ids.length === 0) return;
++    await this.db.delete(publicAgents).where(inArray(publicAgents.id, ids));
++  };
++
++  toggleActive = async (id: string, isActive: boolean): Promise<PublicAgentItem | null> => {
++    return this.update(id, { isActive });
++  };
++}
+\ No newline at end of file
+diff --git a/packages/database/src/schemas/publicAgent.ts b/packages/database/src/schemas/publicAgent.ts
+new file mode 100644
+index 0000000000..72d60420a6
+--- /dev/null
++++ b/packages/database/src/schemas/publicAgent.ts
+@@ -0,0 +1,76 @@
++import type {
++  LobeAgentAgencyConfig,
++  LobeAgentChatConfig,
++  LobeAgentTTSConfig,
++} from '@lobechat/types';
++import { AgentChatConfigSchema } from '@lobechat/types';
++import {
++  boolean,
++  index,
++  jsonb,
++  pgTable,
++  text,
++  uniqueIndex,
++  varchar,
++} from 'drizzle-orm/pg-core';
++import { createInsertSchema } from 'drizzle-zod';
++import { z } from 'zod';
++
++import { idGenerator, randomSlug } from '../utils/idGenerator';
++import { timestamps } from './_helpers';
++
++export const publicAgents = pgTable(
++  'public_agents',
++  {
++    id: text('id')
++      .primaryKey()
++      .$defaultFn(() => idGenerator('publicAgents'))
++      .notNull(),
++
++    slug: varchar('slug', { length: 100 }).$defaultFn(() => randomSlug(3)),
++
++    title: varchar('title', { length: 255 }).notNull(),
++    description: varchar('description', { length: 1000 }),
++    tags: jsonb('tags').$type<string[]>().default([]),
++    avatar: text('avatar'),
++    backgroundColor: text('background_color'),
++
++    plugins: jsonb('plugins').$type<string[]>(),
++
++    agencyConfig: jsonb('agency_config').$type<LobeAgentAgencyConfig>(),
++    chatConfig: jsonb('chat_config').$type<LobeAgentChatConfig>(),
++
++    fewShots: jsonb('few_shots'),
++    model: text('model'),
++    params: jsonb('params').default({}),
++    provider: text('provider'),
++    systemRole: text('system_role'),
++    tts: jsonb('tts').$type<LobeAgentTTSConfig>(),
++
++    openingMessage: text('opening_message'),
++    openingQuestions: text('opening_questions').array().default([]),
++
++    mcpConfig: jsonb('mcp_config').$type<Record<string, any>>(),
++
++    skillsConfig: jsonb('skills_config').$type<Record<string, any>>(),
++
++    version: varchar('version', { length: 50 }).default('1.0.0'),
++
++    isActive: boolean('is_active').default(true),
++
++    ...timestamps,
++  },
++  (t) => [
++    uniqueIndex('public_agents_slug_unique').on(t.slug),
++    index('public_agents_title_idx').on(t.title),
++    index('public_agents_is_active_idx').on(t.isActive),
++  ],
++);
++
++export const insertPublicAgentSchema = createInsertSchema(publicAgents, {
++  agencyConfig: z.custom<LobeAgentAgencyConfig>().nullish(),
++  chatConfig: AgentChatConfigSchema.nullish(),
++});
++
++export type NewPublicAgent = typeof publicAgents.$inferInsert;
++export type PublicAgentItem = typeof publicAgents.$inferSelect;
+\ No newline at end of file

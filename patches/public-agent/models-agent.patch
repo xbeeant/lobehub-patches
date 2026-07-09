@@ -1,0 +1,239 @@
+diff --git a/packages/database/src/models/agent.ts b/packages/database/src/models/agent.ts
+index 96c1174a3c..338396d2b8 100644
+--- a/packages/database/src/models/agent.ts
++++ b/packages/database/src/models/agent.ts
+@@ -14,6 +14,7 @@ import {
+   agentCronJobs,
+   agents,
+   agentsFiles,
++  agentSkills,
+   agentsKnowledgeBases,
+   agentsToSessions,
+   briefs,
+@@ -23,6 +24,7 @@ import {
+   files,
+   knowledgeBases,
+   messages,
++  publicAgents,
+   sessionGroups,
+   sessions,
+   taskComments,
+@@ -32,6 +34,7 @@ import {
+   taskTopics,
+   threads,
+   topics,
++  userConnectors
+ } from '../schemas';
+ import type { LobeChatDatabase } from '../type';
+ import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
+@@ -1359,4 +1362,210 @@ export class AgentModel {
+       return { agentId, slug };
+     });
+   };
++
++  syncPublicAgents = async () => {
++    const activePublicAgents = await this.db.query.publicAgents.findMany({
++      where: eq(publicAgents.isActive, true),
++    });
++
++    if (activePublicAgents.length === 0) return;
++
++    const existingAgents = await this.db.query.agents.findMany({
++      columns: {
++        id: true,
++        publicAgentId: true,
++        syncedVersion: true,
++      },
++      where: and(
++        this.ownership(),
++        inArray(agents.publicAgentId, activePublicAgents.map((p) => p.id)),
++      ),
++    });
++
++    const existingAgentMap = new Map(
++      existingAgents.map((a) => [a.publicAgentId, a]).filter(([k]) => k !== null) as [
++        string,
++        typeof existingAgents[0],
++      ][],
++    );
++
++    const toCreate: typeof activePublicAgents = [];
++    const toUpdate: Array<{ publicAgent: typeof activePublicAgents[0]; agentId: string }> = [];
++
++    for (const publicAgent of activePublicAgents) {
++      const existing = existingAgentMap.get(publicAgent.id);
++      if (existing) {
++        const currentVersion = existing.syncedVersion ?? '0.0.0';
++        if (this.compareVersions(publicAgent.version, currentVersion) > 0) {
++          toUpdate.push({ publicAgent, agentId: existing.id });
++        }
++      } else {
++        toCreate.push(publicAgent);
++      }
++    }
++
++    if (toCreate.length > 0) {
++      const createdAgents = await this.db
++        .insert(agents)
++        .values(
++          toCreate.map((pa) =>
++            buildWorkspacePayload(
++              { userId: this.userId, workspaceId: this.workspaceId },
++              {
++                avatar: pa.avatar,
++                backgroundColor: pa.backgroundColor,
++                agencyConfig: pa.agencyConfig,
++                chatConfig: pa.chatConfig,
++                description: pa.description,
++                fewShots: pa.fewShots,
++                model: pa.model,
++                openingMessage: pa.openingMessage,
++                openingQuestions: pa.openingQuestions,
++                params: pa.params,
++                plugins: pa.plugins,
++                provider: pa.provider,
++                publicAgentId: pa.id,
++                syncedVersion: pa.version,
++                systemRole: pa.systemRole,
++                tags: pa.tags,
++                title: pa.title,
++                tts: pa.tts,
++              },
++            ),
++          ),
++        )
++        .onConflictDoNothing()
++        .returning({ id: agents.id, publicAgentId: agents.publicAgentId });
++
++      await this.initializeAgentMcpAndSkills(createdAgents, activePublicAgents);
++    }
++
++    for (const { publicAgent, agentId } of toUpdate) {
++      await this.db
++        .update(agents)
++        .set(this.buildTemplateUpdatePayload(publicAgent))
++        .where(and(eq(agents.id, agentId), this.ownership()));
++    }
++  };
++
++  private TEMPLATE_MANAGED_FIELDS = [
++    'agencyConfig',
++    'chatConfig',
++    'description',
++    'fewShots',
++    'model',
++    'openingMessage',
++    'openingQuestions',
++    'params',
++    'plugins',
++    'provider',
++    'systemRole',
++    'tts',
++  ] as const;
++
++  private compareVersions = (v1: string, v2: string): number => {
++    const parts1 = v1.split('.').map(Number);
++    const parts2 = v2.split('.').map(Number);
++    const len = Math.max(parts1.length, parts2.length);
++    for (let i = 0; i < len; i++) {
++      const p1 = parts1[i] ?? 0;
++      const p2 = parts2[i] ?? 0;
++      if (p1 < p2) return -1;
++      if (p1 > p2) return 1;
++    }
++    return 0;
++  };
++
++  private buildTemplateUpdatePayload = (publicAgent: typeof publicAgents.$inferSelect) => {
++    const payload: Record<string, any> = { syncedVersion: publicAgent.version, updatedAt: new Date() };
++    for (const field of this.TEMPLATE_MANAGED_FIELDS) {
++      payload[field] = publicAgent[field];
++    }
++    return payload;
++  };
++
++  private initializeAgentMcpAndSkills = async (
++    createdAgents: Array<{ id: string; publicAgentId: string | null }>,
++    publicAgentsList: typeof publicAgents.$inferSelect[],
++  ) => {
++    for (const createdAgent of createdAgents) {
++      if (!createdAgent.publicAgentId) continue;
++
++      const publicAgent = publicAgentsList.find((pa) => pa.id === createdAgent.publicAgentId);
++      if (!publicAgent) continue;
++
++      if (publicAgent.mcpConfig) {
++        await this.initializeAgentMcp(createdAgent.id, publicAgent.mcpConfig);
++      }
++
++      if (publicAgent.skillsConfig) {
++        await this.initializeAgentSkills(createdAgent.id, publicAgent.skillsConfig);
++      }
++    }
++  };
++
++  private initializeAgentMcp = async (agentId: string, mcpConfig: Record<string, any>) => {
++    const mcpConfigs = Array.isArray(mcpConfig) ? mcpConfig : [mcpConfig];
++
++    for (const config of mcpConfigs) {
++      const existingConnector = await this.db.query.userConnectors.findFirst({
++        where: and(
++          eq(userConnectors.agentId, agentId),
++          eq(userConnectors.identifier, config.identifier),
++        ),
++      });
++
++      if (!existingConnector) {
++        await this.db.insert(userConnectors).values(
++          buildWorkspacePayload(
++            { userId: this.userId, workspaceId: this.workspaceId },
++            {
++              agentId,
++              identifier: config.identifier,
++              name: config.name || config.identifier,
++              sourceType: config.sourceType || 'custom',
++              mcpServerUrl: config.mcpServerUrl,
++              mcpConnectionType: config.mcpConnectionType,
++              mcpStdioConfig: config.mcpStdioConfig,
++              status: config.status || 'disconnected',
++              isEnabled: config.isEnabled ?? true,
++              oidcConfig: config.oidcConfig,
++              metadata: config.metadata,
++            },
++          ),
++        );
++      }
++    }
++  };
++
++  private initializeAgentSkills = async (agentId: string, skillsConfig: Record<string, any>) => {
++    const skills = Array.isArray(skillsConfig) ? skillsConfig : [skillsConfig];
++
++    for (const skill of skills) {
++      const existingSkill = await this.db.query.agentSkills.findFirst({
++        where: and(
++          eq(agentSkills.identifier, skill.identifier),
++          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, agentSkills),
++        ),
++      });
++
++      if (!existingSkill) {
++        await this.db.insert(agentSkills).values(
++          buildWorkspacePayload(
++            { userId: this.userId, workspaceId: this.workspaceId },
++            {
++              name: skill.name,
++              description: skill.description || '',
++              identifier: skill.identifier,
++              source: skill.source || 'market',
++              manifest: skill.manifest || {},
++              content: skill.content,
++              editorData: skill.editorData,
++              resources: skill.resources || {},
++            },
++          ),
++        );
++      }
++    }
++  };
+ }

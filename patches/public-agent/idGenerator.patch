@@ -1,0 +1,12 @@
+diff --git a/packages/database/src/utils/idGenerator.ts b/packages/database/src/utils/idGenerator.ts
+index 4245a01e8b..9ca25e9124 100644
+--- a/packages/database/src/utils/idGenerator.ts
++++ b/packages/database/src/utils/idGenerator.ts
+@@ -37,6 +37,7 @@ const prefixes = {
+   workspaceAuditLogs: 'wal',
+   workspaceInvitations: 'wsi',
+   workspaces: 'ws',
++  publicAgents: 'pub',
+ } as const;
+ 
+ export const idGenerator = (namespace: keyof typeof prefixes, size = 12) => {

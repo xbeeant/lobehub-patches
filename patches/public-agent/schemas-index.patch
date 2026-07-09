@@ -1,0 +1,12 @@
+diff --git a/packages/database/src/schemas/index.ts b/packages/database/src/schemas/index.ts
+index 49eccfcfc2..4f7fc8e9a5 100644
+--- a/packages/database/src/schemas/index.ts
++++ b/packages/database/src/schemas/index.ts
+@@ -7,6 +7,7 @@ export * from './agentOperations';
+ export * from './agentShare';
+ export * from './agentSkill';
+ export * from './aiInfra';
++export * from './publicAgent';
+ export * from './apiKey';
+ export * from './asyncTask';
+ export * from './betterAuth';

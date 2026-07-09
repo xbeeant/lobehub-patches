@@ -1,0 +1,13 @@
+diff --git a/apps/server/src/routers/lambda/home.ts b/apps/server/src/routers/lambda/home.ts
+index f27126be51..47767a7d9c 100644
+--- a/apps/server/src/routers/lambda/home.ts
++++ b/apps/server/src/routers/lambda/home.ts
+@@ -30,6 +30,8 @@ export const homeRouter = router({
+   ),
+ 
+   getSidebarAgentList: homeProcedure.query(async ({ ctx }) => {
++    await ctx.agentModel.syncPublicAgents();
++
+     const result = await ctx.homeRepository.getSidebarAgentList();
+ 
+     // Runtime migration: backfill sessionGroupId for legacy agents
