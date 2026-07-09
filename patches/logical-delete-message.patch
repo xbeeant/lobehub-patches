@@ -1,0 +1,105 @@
+diff --git a/packages/database/src/models/message.ts b/packages/database/src/models/message.ts
+index f220af14c8..4f4512cc0c 100644
+--- a/packages/database/src/models/message.ts
++++ b/packages/database/src/models/message.ts
+@@ -309,9 +309,12 @@ export class MessageModel {
+     this.workspaceId = workspaceId;
+   }
+ 
+-  private ownership = () =>
++  private ownershipWithDeleted = () =>
+     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, messages);
+ 
++  private ownership = () =>
++    and(this.ownershipWithDeleted(), not(eq(messages.deleted, true)));
++
+   private pluginsOwnership = () =>
+     buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, messagePlugins);
+ 
+@@ -2712,7 +2715,7 @@ export class MessageModel {
+       const message = await tx
+         .select()
+         .from(messages)
+-        .where(and(eq(messages.id, id), this.ownership()))
++        .where(and(eq(messages.id, id), this.ownershipWithDeleted()))
+         .limit(1);
+ 
+       // If the message to be deleted is not found, return directly
+@@ -2723,7 +2726,7 @@ export class MessageModel {
+       await tx
+         .update(messages)
+         .set({ parentId: message[0].parentId })
+-        .where(and(eq(messages.parentId, id), this.ownership()));
++        .where(and(eq(messages.parentId, id), this.ownershipWithDeleted()));
+ 
+       // 3. Check if the message contains tools
+       const toolCallIds = (message[0].tools as ChatToolPayload[])
+@@ -2745,10 +2748,11 @@ export class MessageModel {
+       // 5. Merge the list of message ids to be deleted
+       const messageIdsToDelete = [id, ...relatedMessageIds];
+ 
+-      // 6. Delete all related messages
++      // 6. Mark all related messages as deleted
+       await tx
+-        .delete(messages)
+-        .where(and(this.ownership(), inArray(messages.id, messageIdsToDelete)));
++        .update(messages)
++        .set({ deleted: true })
++        .where(and(this.ownershipWithDeleted(), inArray(messages.id, messageIdsToDelete)));
+ 
+       // 7. Keep the topic's usage rollup in sync (pure derived — a removed
+       // assistant message must drop out of the topic totals).
+@@ -2823,8 +2827,11 @@ export class MessageModel {
+           .where(and(eq(messages.id, child.id), this.ownership()));
+       }
+ 
+-      // 6. Delete the messages
+-      await tx.delete(messages).where(and(this.ownership(), inArray(messages.id, ids)));
++      // 6. Mark the messages as deleted
++      await tx
++        .update(messages)
++        .set({ deleted: true })
++        .where(and(this.ownership(), inArray(messages.id, ids)));
+ 
+       // 7. Recompute the usage rollup for every affected topic (pure derived).
+       const affectedTopicIds = [
+@@ -2886,7 +2893,8 @@ export class MessageModel {
+     groupId?: string | null,
+   ) =>
+     this.db
+-      .delete(messages)
++      .update(messages)
++      .set({ deleted: true })
+       .where(
+         and(
+           this.ownership(),
+@@ -2897,7 +2905,7 @@ export class MessageModel {
+       );
+ 
+   deleteAllMessages = async () => {
+-    return this.db.delete(messages).where(and(this.ownership()));
++    return this.db.update(messages).set({ deleted: true }).where(and(this.ownership()));
+   };
+ 
+   /**
+@@ -2921,7 +2929,7 @@ export class MessageModel {
+       ? or(eq(messages.agentId, agentId), eq(messages.sessionId, associatedSessionId))
+       : eq(messages.agentId, agentId);
+ 
+-    return this.db.delete(messages).where(and(this.ownership(), agentCondition));
++    return this.db.update(messages).set({ deleted: true }).where(and(this.ownership(), agentCondition));
+   };
+ 
+   // **************** Helper *************** //
+diff --git a/packages/database/src/schemas/message.ts b/packages/database/src/schemas/message.ts
+index 045cedf4ae..5ec3170b14 100644
+--- a/packages/database/src/schemas/message.ts
++++ b/packages/database/src/schemas/message.ts
+@@ -150,6 +150,7 @@ export const messages = pgTable(
+       onDelete: 'cascade',
+     }),
+     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
++    deleted: boolean('deleted').default(false),
+     ...timestamps,
+   },
+   (table) => [
