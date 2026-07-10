@@ -1,5 +1,5 @@
 diff --git a/packages/database/src/models/agent.ts b/packages/database/src/models/agent.ts
-index 96c1174a3c..338396d2b8 100644
+index 3747e8e45d..577a6ba673 100644
 --- a/packages/database/src/models/agent.ts
 +++ b/packages/database/src/models/agent.ts
 @@ -14,6 +14,7 @@ import {
@@ -18,15 +18,23 @@ index 96c1174a3c..338396d2b8 100644
    sessionGroups,
    sessions,
    taskComments,
-@@ -32,6 +34,7 @@ import {
+@@ -31,12 +33,15 @@ import {
+   tasks,
    taskTopics,
    threads,
++  ToolCRUDType,
    topics,
-+  userConnectors
++  userConnectors,
  } from '../schemas';
  import type { LobeChatDatabase } from '../type';
  import { genEndDateWhere, genRangeWhere, genStartDateWhere, genWhere } from '../utils/genWhere';
-@@ -1359,4 +1362,210 @@ export class AgentModel {
+ import { normalizeInboxAgentMeta } from '../utils/inboxAgent';
+ import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
++import { ConnectorToolModel } from './connectorTool';
+ 
+ /**
+  * Fields the Agent Builder's own row (`slug = BUILTIN_AGENT_SLUGS.agentBuilder`) must never
+@@ -1372,4 +1377,246 @@ export class AgentModel {
        return { agentId, slug };
      });
    };
@@ -64,7 +72,7 @@ index 96c1174a3c..338396d2b8 100644
 +      const existing = existingAgentMap.get(publicAgent.id);
 +      if (existing) {
 +        const currentVersion = existing.syncedVersion ?? '0.0.0';
-+        if (this.compareVersions(publicAgent.version, currentVersion) > 0) {
++        if (this.compareVersions(publicAgent.version!, currentVersion) > 0) {
 +          toUpdate.push({ publicAgent, agentId: existing.id });
 +        }
 +      } else {
@@ -84,6 +92,7 @@ index 96c1174a3c..338396d2b8 100644
 +                backgroundColor: pa.backgroundColor,
 +                agencyConfig: pa.agencyConfig,
 +                chatConfig: pa.chatConfig,
++                editorData: pa.editorData,
 +                description: pa.description,
 +                fewShots: pa.fewShots,
 +                model: pa.model,
@@ -124,6 +133,7 @@ index 96c1174a3c..338396d2b8 100644
 +    'model',
 +    'openingMessage',
 +    'openingQuestions',
++    'editorData',
 +    'params',
 +    'plugins',
 +    'provider',
@@ -169,6 +179,11 @@ index 96c1174a3c..338396d2b8 100644
 +      if (publicAgent.skillsConfig) {
 +        await this.initializeAgentSkills(createdAgent.id, publicAgent.skillsConfig);
 +      }
++
++      if (publicAgent.mcpToolsConfig) {
++        await this.initializeAgentMcpTools(createdAgent.id, publicAgent.mcpToolsConfig);
++      }
++
 +    }
 +  };
 +
@@ -234,6 +249,35 @@ index 96c1174a3c..338396d2b8 100644
 +          ),
 +        );
 +      }
++    }
++  };
++
++  private initializeAgentMcpTools = async (agentId: string, mcpToolsConfig: Record<string, any>) => {
++    const connectorToolModel = new ConnectorToolModel(this.db, this.userId, this.workspaceId);
++
++    for (const [connectorIdentifier, tools] of Object.entries(mcpToolsConfig)) {
++      const connector = await this.db.query.userConnectors.findFirst({
++        where: and(
++          eq(userConnectors.agentId, agentId),
++          eq(userConnectors.identifier, connectorIdentifier),
++        ),
++      });
++
++      if (!connector) continue;
++
++      const toolList = Array.isArray(tools) ? tools : [tools];
++      const syncTools = toolList.map((tool: any) => ({
++        crudType: tool.crudType || ToolCRUDType.read,
++        defaultPermission: tool.defaultPermission,
++        description: tool.description,
++        displayName: tool.displayName,
++        inputSchema: tool.inputSchema,
++        outputSchema: tool.outputSchema,
++        renderConfig: tool.renderConfig,
++        toolName: tool.toolName,
++      }));
++
++      await connectorToolModel.upsertMany(connector.id, syncTools);
 +    }
 +  };
  }

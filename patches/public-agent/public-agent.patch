@@ -1,35 +1,39 @@
 diff --git a/packages/database/migrations/0117_add_public_agents.sql b/packages/database/migrations/0117_add_public_agents.sql
 new file mode 100644
-index 0000000000..aa3097f3bd
+index 0000000000..73f8f6b04b
 --- /dev/null
 +++ b/packages/database/migrations/0117_add_public_agents.sql
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,41 @@
 +CREATE TABLE IF NOT EXISTS "public_agents" (
-+	"id" text PRIMARY KEY NOT NULL,
-+	"slug" varchar(100),
-+	"title" varchar(255) NOT NULL,
-+	"description" varchar(1000),
-+	"tags" jsonb DEFAULT '[]'::jsonb,
-+	"avatar" text,
-+	"background_color" text,
-+	"plugins" jsonb,
-+	"agency_config" jsonb,
-+	"chat_config" jsonb,
-+	"few_shots" jsonb,
-+	"model" text,
-+	"params" jsonb DEFAULT '{}'::jsonb,
-+	"provider" text,
-+	"system_role" text,
-+	"tts" jsonb,
-+	"opening_message" text,
-+	"opening_questions" text[],
-+	"mcp_config" jsonb,
-+	"skills_config" jsonb,
-+	"version" varchar(50) DEFAULT '1.0.0',
-+	"is_active" boolean DEFAULT true,
-+	"created_at" timestamp DEFAULT now() NOT NULL,
-+	"updated_at" timestamp DEFAULT now() NOT NULL,
-+	"accessed_at" timestamp DEFAULT now() NOT NULL
++  "id" text COLLATE "pg_catalog"."default" NOT NULL,
++  "slug" varchar(100) COLLATE "pg_catalog"."default",
++  "title" varchar(255) COLLATE "pg_catalog"."default",
++  "description" varchar(1000) COLLATE "pg_catalog"."default",
++  "tags" jsonb DEFAULT '[]'::jsonb,
++  "avatar" text COLLATE "pg_catalog"."default",
++  "background_color" text COLLATE "pg_catalog"."default",
++  "plugins" jsonb,
++  "chat_config" jsonb,
++  "few_shots" jsonb,
++  "model" text COLLATE "pg_catalog"."default",
++  "params" jsonb DEFAULT '{}'::jsonb,
++  "provider" text COLLATE "pg_catalog"."default",
++  "system_role" text COLLATE "pg_catalog"."default",
++  "tts" jsonb,
++  "opening_message" text COLLATE "pg_catalog"."default",
++  "opening_questions" text[] COLLATE "pg_catalog"."default" DEFAULT '{}'::text[],
++  "virtual" bool DEFAULT false,
++  "market_identifier" text COLLATE "pg_catalog"."default",
++  "editor_data" jsonb,
++  "agency_config" jsonb,
++  "mcp_config" jsonb,
++  "mcp_tools_config" jsonb,
++  "skills_config" jsonb,
++  "version" varchar(50) DEFAULT '1.0.0',
++  "is_active" boolean DEFAULT true,
++  "created_at" timestamp DEFAULT now() NOT NULL,
++  "updated_at" timestamp DEFAULT now() NOT NULL,
++  "accessed_at" timestamp DEFAULT now() NOT NULL
 +);
 +
 +CREATE UNIQUE INDEX IF NOT EXISTS "public_agents_slug_unique" ON "public_agents" USING btree ("slug");
@@ -117,10 +121,10 @@ index 0000000000..bb9eebebc3
 \ No newline at end of file
 diff --git a/packages/database/src/schemas/publicAgent.ts b/packages/database/src/schemas/publicAgent.ts
 new file mode 100644
-index 0000000000..72d60420a6
+index 0000000000..c0d4cc0c62
 --- /dev/null
 +++ b/packages/database/src/schemas/publicAgent.ts
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,70 @@
 +import type {
 +  LobeAgentAgencyConfig,
 +  LobeAgentChatConfig,
@@ -151,34 +155,28 @@ index 0000000000..72d60420a6
 +      .notNull(),
 +
 +    slug: varchar('slug', { length: 100 }).$defaultFn(() => randomSlug(3)),
-+
-+    title: varchar('title', { length: 255 }).notNull(),
++    title: varchar('title', { length: 255 }),
 +    description: varchar('description', { length: 1000 }),
 +    tags: jsonb('tags').$type<string[]>().default([]),
++    editorData: jsonb('editor_data'),
 +    avatar: text('avatar'),
 +    backgroundColor: text('background_color'),
-+
 +    plugins: jsonb('plugins').$type<string[]>(),
-+
 +    agencyConfig: jsonb('agency_config').$type<LobeAgentAgencyConfig>(),
 +    chatConfig: jsonb('chat_config').$type<LobeAgentChatConfig>(),
-+
 +    fewShots: jsonb('few_shots'),
 +    model: text('model'),
 +    params: jsonb('params').default({}),
 +    provider: text('provider'),
 +    systemRole: text('system_role'),
 +    tts: jsonb('tts').$type<LobeAgentTTSConfig>(),
-+
 +    openingMessage: text('opening_message'),
 +    openingQuestions: text('opening_questions').array().default([]),
-+
 +    mcpConfig: jsonb('mcp_config').$type<Record<string, any>>(),
-+
++    mcpToolsConfig: jsonb('mcp_tools_config').$type<Record<string, any>>(),
 +    skillsConfig: jsonb('skills_config').$type<Record<string, any>>(),
 +
 +    version: varchar('version', { length: 50 }).default('1.0.0'),
-+
 +    isActive: boolean('is_active').default(true),
 +
 +    ...timestamps,
