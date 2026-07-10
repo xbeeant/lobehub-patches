@@ -1,5 +1,5 @@
 diff --git a/packages/database/src/models/agent.ts b/packages/database/src/models/agent.ts
-index 3747e8e45d..577a6ba673 100644
+index 3747e8e45d..b1fff8670e 100644
 --- a/packages/database/src/models/agent.ts
 +++ b/packages/database/src/models/agent.ts
 @@ -14,6 +14,7 @@ import {
@@ -34,7 +34,7 @@ index 3747e8e45d..577a6ba673 100644
  
  /**
   * Fields the Agent Builder's own row (`slug = BUILTIN_AGENT_SLUGS.agentBuilder`) must never
-@@ -1372,4 +1377,246 @@ export class AgentModel {
+@@ -1372,4 +1377,245 @@ export class AgentModel {
        return { agentId, slug };
      });
    };
@@ -193,8 +193,8 @@ index 3747e8e45d..577a6ba673 100644
 +    for (const config of mcpConfigs) {
 +      const existingConnector = await this.db.query.userConnectors.findFirst({
 +        where: and(
-+          eq(userConnectors.agentId, agentId),
 +          eq(userConnectors.identifier, config.identifier),
++          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, userConnectors),
 +        ),
 +      });
 +
@@ -203,7 +203,6 @@ index 3747e8e45d..577a6ba673 100644
 +          buildWorkspacePayload(
 +            { userId: this.userId, workspaceId: this.workspaceId },
 +            {
-+              agentId,
 +              identifier: config.identifier,
 +              name: config.name || config.identifier,
 +              sourceType: config.sourceType || 'custom',
@@ -258,8 +257,8 @@ index 3747e8e45d..577a6ba673 100644
 +    for (const [connectorIdentifier, tools] of Object.entries(mcpToolsConfig)) {
 +      const connector = await this.db.query.userConnectors.findFirst({
 +        where: and(
-+          eq(userConnectors.agentId, agentId),
 +          eq(userConnectors.identifier, connectorIdentifier),
++          buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, userConnectors),
 +        ),
 +      });
 +
